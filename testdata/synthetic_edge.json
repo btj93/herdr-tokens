@@ -1,0 +1,76 @@
+{
+  "_comment": "SYNTHETIC FIXTURE - HAND-AUTHORED, NOT captured from a real Herdr session. See internal/derive/synthetic_edge_test.go. Exercises two branches the real captured testdata/snapshot.json cannot: a workspace with a null agent_status and zero agents (-> st_none), and a workspace with agent_status \"unknown\" (-> st_unknown), plus a workspace with more than one blocked agent (-> att_blocked > 1). Every path, workspace label, and terminal title below is a placeholder; do not mistake this for sanitized live data and do not re-capture over it.",
+  "type": "session_snapshot",
+  "snapshot": {
+    "workspaces": [
+      {
+        "workspace_id": "space-x-none",
+        "label": "space-x",
+        "agent_status": null,
+        "active_tab_id": "space-x-none:t1",
+        "number": 1,
+        "pane_count": 1,
+        "tab_count": 1,
+        "focused": false
+      },
+      {
+        "workspace_id": "space-x-blocked",
+        "label": "space-x",
+        "agent_status": "blocked",
+        "active_tab_id": "space-x-blocked:t1",
+        "number": 2,
+        "pane_count": 3,
+        "tab_count": 1,
+        "focused": false
+      },
+      {
+        "workspace_id": "space-x-unknown",
+        "label": "space-x",
+        "agent_status": "unknown",
+        "active_tab_id": "space-x-unknown:t1",
+        "number": 3,
+        "pane_count": 1,
+        "tab_count": 1,
+        "focused": false
+      }
+    ],
+    "agents": [
+      {
+        "workspace_id": "space-x-blocked",
+        "agent": "agent",
+        "agent_status": "blocked",
+        "cwd": "/Users/user/projects/proj1",
+        "foreground_cwd": "/Users/user/projects/proj1",
+        "pane_id": "space-x-blocked:p1",
+        "tab_id": "space-x-blocked:t1",
+        "terminal_title": "agent",
+        "terminal_title_stripped": "agent",
+        "focused": false
+      },
+      {
+        "workspace_id": "space-x-blocked",
+        "agent": "agent",
+        "agent_status": "blocked",
+        "cwd": "/Users/user/projects/proj1",
+        "foreground_cwd": "/Users/user/projects/proj1",
+        "pane_id": "space-x-blocked:p2",
+        "tab_id": "space-x-blocked:t1",
+        "terminal_title": "agent",
+        "terminal_title_stripped": "agent",
+        "focused": false
+      },
+      {
+        "workspace_id": "space-x-blocked",
+        "agent": "agent",
+        "agent_status": "idle",
+        "cwd": "/Users/user/projects/proj1",
+        "foreground_cwd": "/Users/user/projects/proj1",
+        "pane_id": "space-x-blocked:p3",
+        "tab_id": "space-x-blocked:t1",
+        "terminal_title": "shell",
+        "terminal_title_stripped": "shell",
+        "focused": true
+      }
+    ]
+  }
+}
