@@ -28,3 +28,32 @@ Verified against **Herdr 0.8.2, protocol 20** on macOS.
   but could not be classified.
 - The plugin subscribes to no events. Polling doubles as the TTL heartbeat,
   which avoids a metadata feedback loop.
+
+### Known limitation — fixture privacy guards are shape-based
+
+`scripts/sanitize.py`, the fixture tests, and `.githooks/pre-commit` detect
+private data by scanning for *known-bad shapes*: a `/Users/` path that is not
+the placeholder, a tilde path, a non-generic `terminal_title`, a UUID, a
+`term_`-prefixed identifier. That is a denylist, and a denylist has a specific
+blind spot worth stating plainly:
+
+**A scan for known-bad shapes cannot distinguish a leak from its own fix.**
+
+This was demonstrated, not theorised. Two independently written audit tools
+each cleared their own repository and each raised false positives against the
+*other's* placeholders — one pattern matched any `term_` containing a hex
+letter and so flagged the replacement value `term_00000000abcd`; the other
+excluded only `term_0+` and so flagged the placeholder `term_000000000001`.
+Both tools were correct about the data and wrong about the other's convention.
+
+A further consequence, also observed: fixing a fixture by regenerating it
+corrects `HEAD` and leaves every historical blob untouched, while every
+subsequent working-tree check reports success. Scan every object in history,
+not the files you just edited.
+
+The v0.1.1 direction is to invert this — assert that fixtures conform to a
+**positive schema** of permitted values, rather than scanning for a growing
+list of forbidden ones. An allowlist would have returned clean for both tools
+on the first pass. Until then, treat a novel identifier shape as likely rather
+than hypothetical: three distinct classes of private data were found here in
+sequence, each invisible to the rule that caught the previous one.
