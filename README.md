@@ -37,41 +37,92 @@ picker instead of the CLI directly.
 ### Consumer setup
 
 `herdr-tokens` only writes tokens; something must be configured to *read*
-them for you to see anything. The most common consumer is Herdr's own
-sidebar. Add all **six** `st_*` variants to your `[ui.sidebar.spaces]` row,
-in your own `~/.config/herdr/config.toml`:
+them, and to *colour* them, for anything to visibly change. The most common
+consumer is Herdr's own sidebar, and this is also where the plugin's entire
+reason for existing lives: Herdr's per-token style (`fg`/`bold`/`dim`) is
+**static** — a given token is always rendered the same way, there is no
+conditional styling anywhere in Herdr's UI config. The only way to get a
+colour that reacts to agent status is the indirection this plugin provides:
+it varies which token *name* is set, and you give each name its own,
+otherwise-static, `fg`. A colour that never changes, attached to a name that
+does, behaves like a conditional one.
+
+Add this to your own `~/.config/herdr/config.toml`:
 
 ```toml
 [ui.sidebar.spaces]
 rows = [[
   "state_icon",
-  "$st_working", "$st_blocked", "$st_done", "$st_idle", "$st_unknown", "$st_none",
+  { token = "$st_working", fg = "#dbb651" },
+  { token = "$st_blocked", fg = "#e75a7c" },
+  { token = "$st_done",    fg = "#8fb573" },
+  { token = "$st_idle",    fg = "#888986" },
+  { token = "$st_unknown", fg = "#5b5e5a" },
+  { token = "$st_none",    fg = "#888986" },
 ]]
 ```
 
-Two things about this row are easy to get wrong:
+Those specific hex values are a working example, not a requirement — pick
+whatever colours suit your own theme, entirely your call. What is **not**
+optional is that every variant carries its **own** `fg`: that per-name
+colour *is* the mechanism. A row that lists the six `$st_*` tokens as bare
+strings with no `fg` at all (as an earlier draft of this README did) is
+valid Herdr syntax and will render the workspace name — but every variant
+renders in the same, unstyled colour, which looks and behaves exactly like
+the plugin doing nothing. Herdr's inline token style block accepts `fg`
+(strict `#RGB`/`#RRGGBB`), `bold`, and `dim` — nothing else, and none of it
+is set by this plugin (see "What it does" above); it only decides which of
+the six names is live.
 
-- **You must list all six variants, including `$st_none`.** Exactly one
-  `st_*` token is set on any given workspace at any time; the rest are
-  cleared. If you leave `$st_none` out of the row because it "does nothing" —
-  it's the variant that fires on every ordinary workspace with no agent
-  running, so it is also the one variant nobody happens to test by hand —
-  then the row has nothing to render for every agent-free workspace, and
-  **the workspace's name disappears from the sidebar entirely**, not just its
-  colour. The name is carried *inside* the token (see Configuration below),
-  not displayed alongside it, so there is no fallback text left once the
-  token is absent.
+Three things about this row are worth reading together:
+
+- **Exactly one of the six is set at any moment, so exactly one `fg` ever
+  shows.** `st_working`, `st_blocked`, `st_done`, `st_idle`, `st_unknown`,
+  `st_none` are a mutually exclusive group per workspace (see Token
+  reference below) — one token carries the name, the rest are cleared, so
+  the row's per-token `fg` values never compete or blend, only ever swap.
+- **You must list all six variants, including `$st_none`.** If you leave
+  `$st_none` out of the row because it "does nothing" — it's the variant
+  that fires on every ordinary workspace with no agent running, so it is
+  also the one variant nobody happens to test by hand — then the row has
+  nothing to render for every agent-free workspace, and **the workspace's
+  name disappears from the sidebar entirely**, not just its colour. The name
+  is carried *inside* the token (see Configuration below), not displayed
+  alongside it, so there is no fallback text left once the token is absent.
 - **Do not also include a plain `workspace` token in the same row.** The
   default sidebar row ships as `rows = [["state_icon", "workspace"]]`. If you
   keep `"workspace"` alongside the six `st_*` entries, the workspace name
   renders twice: once from the plain built-in token, once from whichever
-  `st_*` token happens to be set. Replace `"workspace"` with the six `st_*`
-  entries; don't add to it.
+  `st_*` token happens to be set. Replace `"workspace"` with the six styled
+  `st_*` entries; don't add to it.
 
-Per-token colour, dimming, boldness, etc. are configured entirely on the
-consumer side (Herdr's own UI configuration, or the reading plugin's own
-docs) — this plugin has no say in and no knowledge of how any token is
-styled.
+#### Styling `att_blocked` and `n_agents`
+
+If you also surface the two count tokens — as extra columns in the same row,
+or a second row — give them the same styled treatment, not bare tokens, for
+the same reason as above. A blocked agent is the one state worth actually
+calling attention to, so `bold` earns its keep here:
+
+```toml
+[ui.sidebar.spaces]
+rows = [[
+  "state_icon",
+  { token = "$st_working", fg = "#dbb651" },
+  { token = "$st_blocked", fg = "#e75a7c" },
+  { token = "$st_done",    fg = "#8fb573" },
+  { token = "$st_idle",    fg = "#888986" },
+  { token = "$st_unknown", fg = "#5b5e5a" },
+  { token = "$st_none",    fg = "#888986" },
+  { token = "$att_blocked", fg = "#e75a7c", bold = true },
+  { token = "$n_agents",    fg = "#888986", dim = true },
+]]
+```
+
+Both are absent — not `"0"` — when they don't apply (see Token reference
+below), so a bare `$att_blocked` and this styled one render identically
+until an agent is actually blocked. Style it anyway: the point of this
+plugin is that the name/colour it produces should never be the *one* place
+in your config that's still a static, unconditional token.
 
 ## Token reference
 
