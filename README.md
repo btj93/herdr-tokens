@@ -21,18 +21,44 @@ already belongs to the consumer, and would fight it over which value wins.
 ## Install
 
 ```
-cd herdr-tokens
-herdr plugin link
+herdr plugin link /path/to/herdr-tokens
 ```
 
+`link` requires the path; it does not default to the current directory.
+
 Herdr builds the plugin using the `[[build]]` command in
-`herdr-plugin.toml` (`go build -o bin/herdr-tokens ./cmd/herdr-tokens`) and
-starts the daemon automatically, both on Herdr startup and whenever a new
-pane is created (`[[startup]]` / `[[events]] on = "pane.created"`), so a
-freshly opened session always has a live producer without you needing to run
-anything by hand. `start`, `stop`, `validate-config`, and `preview` are also
-exposed as manifest actions if you want to drive them from Herdr's action
-picker instead of the CLI directly.
+`herdr-plugin.toml` (`go build -o bin/herdr-tokens ./cmd/herdr-tokens`), and
+the `[[startup]]` / `[[events]] on = "pane.created"` hooks start the daemon
+on Herdr startup and whenever a new pane is created.
+
+### If you link into an already-running Herdr, start the daemon by hand
+
+**The startup hook does not fire on `link` or `enable`.** Verified against
+Herdr 0.8.2: after linking and enabling mid-session the registry showed
+`enabled: true`, the plugin log was empty, and no daemon was running. The
+hooks fire on Herdr *startup* and on `pane.created` — neither of which is
+"you just linked me".
+
+So a user who installs mid-session gets a registered, enabled, completely
+silent plugin and no indication why nothing appears. Either restart Herdr,
+create a pane, or start it explicitly:
+
+```
+herdr plugin action invoke start --plugin herdr-tokens
+```
+
+Confirm it took, rather than assuming:
+
+```
+herdr plugin log list --plugin herdr-tokens --limit 3
+```
+
+A successful start reports its pid and the daemon's log path. That log is
+where snapshot failures and reconcile errors go — if tokens are not
+appearing, read it first.
+
+`start`, `stop`, `validate-config`, and `preview` are all exposed as manifest
+actions, so they can be driven from Herdr's action picker as well as the CLI.
 
 ### Consumer setup
 
