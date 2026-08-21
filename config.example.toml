@@ -1,0 +1,19 @@
+# herdr-tokens configuration. All fields optional; a missing file is valid.
+#
+# Colours are NOT set here. This plugin chooses which token name is written;
+# your Herdr config decides what each token looks like. See README.
+
+schema_version = 1
+
+# How often the snapshot is polled. Also the heartbeat period.
+poll_interval = "3s"
+
+# Token lifetime. Must be >= 3x poll_interval. If the daemon dies, tokens
+# expire after this long and workspace names disappear from the sidebar --
+# a deliberate, visible failure rather than a silently stale colour.
+ttl = "90s"
+
+# What the st_* tokens carry.
+#   "label"  - the workspace name, so the NAME renders in the status colour.
+#   "status" - the status word. Safer: expiry costs only the colour, not the name.
+value = "label"
