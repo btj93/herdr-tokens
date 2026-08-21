@@ -1,0 +1,125 @@
+#!/bin/sh
+# Layer 2 of herdr-tokens' fixture PII defence (see README, "Contributing /
+# working on fixtures"). Layer 1 is scripts/capture-fixture.sh sanitizing at
+# capture time -- that remains the primary defence, and unsanitized data
+# should never reach the working tree at all. This hook is what stops such
+# data from reaching *local history* if layer 1 is ever bypassed: once a
+# commit exists, a push is one command away, and the exposure becomes a
+# matter of when, not if -- the same exposure a sibling project paid for
+# with a 14-commit filter-branch rewrite. Layer 3 (the CI job) is only a
+# backstop for a commit made with --no-verify, or a clone that never ran
+# `make install-hooks`; it is the last line, not the first.
+#
+# Deliberately inspects the STAGED blob via `git show :<path>`, not the
+# working tree: staging a bad fixture and then cleaning up the file on disk
+# afterwards must still be caught, because it is the staged content that
+# actually gets committed.
+#
+# POSIX sh only, and deliberately avoids GNU-only regex behaviour (e.g. a
+# trailing empty alternative in an ERE such as `(shell|agent|nvim|)$`) since
+# this runs on whatever grep a developer's machine has -- BSD grep, a ugrep
+# shim, etc. -- not necessarily GNU grep. Rule 3 below uses `case` instead of
+# an alternation regex for exactly that reason.
+
+set -eu
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+report() {
+	# report <file> <line> <rule> <detail>
+	printf 'BLOCKED %s:%s [%s] %s\n' "$1" "$2" "$3" "$4" >&2
+	: >"$tmp/failed"
+}
+
+git diff --cached --name-only --diff-filter=d -- testdata/ >"$tmp/staged" 2>/dev/null || : >"$tmp/staged"
+if [ ! -s "$tmp/staged" ]; then
+	exit 0
+fi
+
+me=$(id -un)
+
+while IFS= read -r f; do
+	[ -n "$f" ] || continue
+
+	blob="$tmp/blob"
+	git show ":$f" >"$blob" 2>/dev/null || continue
+
+	# --- Rule 1: no /Users/<name> other than /Users/user ---
+	grep -nE '/Users/[^"/]+' "$blob" >"$tmp/cand1" 2>/dev/null || : >"$tmp/cand1"
+	while IFS=: read -r lineno rest; do
+		[ -n "$lineno" ] || continue
+		printf '%s\n' "$rest" | grep -oE '/Users/[^"/]+' >"$tmp/tok1" 2>/dev/null || : >"$tmp/tok1"
+		while IFS= read -r tok; do
+			[ -n "$tok" ] || continue
+			if [ "$tok" != "/Users/user" ]; then
+				report "$f" "$lineno" "USERS_PATH" "found $tok (only /Users/user is allowed)"
+			fi
+		done <"$tmp/tok1"
+	done <"$tmp/cand1"
+
+	# --- Rule 2: no tilde path other than ~/projects/app ---
+	grep -nE '~/[A-Za-z0-9_./-]+' "$blob" >"$tmp/cand2" 2>/dev/null || : >"$tmp/cand2"
+	while IFS=: read -r lineno rest; do
+		[ -n "$lineno" ] || continue
+		printf '%s\n' "$rest" | grep -oE '~/[A-Za-z0-9_./-]+' >"$tmp/tok2" 2>/dev/null || : >"$tmp/tok2"
+		while IFS= read -r tok; do
+			[ -n "$tok" ] || continue
+			if [ "$tok" != "~/projects/app" ]; then
+				report "$f" "$lineno" "TILDE_PATH" "found $tok (only ~/projects/app is allowed)"
+			fi
+		done <"$tmp/tok2"
+	done <"$tmp/cand2"
+
+	# --- Rule 3: terminal_title / terminal_title_stripped must be one of
+	# shell, agent, nvim, or empty. Fixed-string grep to find candidate
+	# lines (portable), then a POSIX BRE sed to pull the JSON value out,
+	# then a plain `case` to test membership -- no alternation regex, so
+	# this cannot hit the empty-alternative parser issue GNU/BSD/ugrep
+	# disagree on.
+	grep -nF '"terminal_title' "$blob" >"$tmp/cand3" 2>/dev/null || : >"$tmp/cand3"
+	while IFS=: read -r lineno rest; do
+		[ -n "$lineno" ] || continue
+		val=$(printf '%s\n' "$rest" | sed -n 's/.*"terminal_title[a-zA-Z_]*" *: *"\([^"]*\)".*/\1/p')
+		case "$val" in
+		shell | agent | nvim | "") ;;
+		*)
+			report "$f" "$lineno" "TERMINAL_TITLE" "found \"$val\" (only shell/agent/nvim/empty are allowed)"
+			;;
+		esac
+	done <"$tmp/cand3"
+
+	# --- Rule 4: no occurrence of the committing user's own account name.
+	# `git config user.name` is not reliable for this (it's freely set and
+	# may not match the machine account at all); the machine account name
+	# via `id -un` is what would actually appear in a captured path.
+	case "$me" in
+	user | runner | "") ;; # these ARE the sanctioned placeholders; nothing to guard against
+	*)
+		grep -nF "$me" "$blob" >"$tmp/cand4" 2>/dev/null || : >"$tmp/cand4"
+		while IFS=: read -r lineno rest; do
+			[ -n "$lineno" ] || continue
+			report "$f" "$lineno" "REAL_USERNAME" "line contains committing user's account name ($me)"
+		done <"$tmp/cand4"
+		;;
+	esac
+done <"$tmp/staged"
+
+if [ -f "$tmp/failed" ]; then
+	{
+		echo ""
+		echo "pre-commit: refusing to commit -- testdata/ fixture(s) above look unsanitized."
+		echo "Do not hand-edit the fixture to patch this: it is not a fix, because the next"
+		echo "capture silently overwrites hand edits anyway. Instead, re-run:"
+		echo ""
+		echo "    ./scripts/capture-fixture.sh testdata/<file>.json"
+		echo ""
+		echo "and re-stage the regenerated, sanitized file."
+		echo ""
+		echo "(Emergency bypass: git commit --no-verify -- but the fixtures-are-sanitized CI"
+		echo "job still runs and will still fail; it's a backstop, not a way around this.)"
+	} >&2
+	exit 1
+fi
+
+exit 0

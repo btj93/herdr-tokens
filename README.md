@@ -205,3 +205,43 @@ across every plugin writing metadata, not allocated per-plugin. Nothing
 enforces these prefixes at the protocol level; the convention that
 `herdr-tokens` owns them is the only protection they have. If you are writing
 another plugin, please treat `st_*`, `att_*`, and `n_*` as taken.
+
+## Contributing / working on fixtures
+
+`testdata/` fixtures are captures of a real Herdr session and are the single
+easiest way for this repo to leak someone's real username, filesystem
+layout, or window titles. That risk is handled in three layers, cheapest and
+earliest first:
+
+1. **Sanitize at capture.** `scripts/capture-fixture.sh` (`make fixture`) is
+   the *only* sanctioned way to produce or refresh a fixture. It pipes a live
+   snapshot through `scripts/sanitize.py` before anything touches
+   `testdata/`, so an unsanitized capture should never even reach the
+   working tree.
+2. **The pre-commit hook blocks the commit.** Run `make install-hooks` once
+   per clone (this points git at the tracked `.githooks/` directory, since
+   git does not share `.git/hooks/` across clones — a plain `git clone`
+   without this step has no hook installed). From then on, `git commit`
+   inspects the *staged* contents of any `testdata/` file — not the working
+   tree, so staging a bad fixture and then cleaning up the file on disk
+   afterwards still gets caught — and refuses the commit if it finds a
+   `/Users/` path other than `/Users/user`, a tilde path other than
+   `~/projects/app`, a `terminal_title`/`terminal_title_stripped` outside
+   `shell`/`agent`/`nvim`/empty, or your own machine account name
+   (`id -un`). This is what actually stops a leak: once bad data is
+   committed *locally*, a push is one command away, and exposure becomes a
+   matter of when, not if.
+3. **CI is the backstop, not the guard.** The `fixtures-are-sanitized` job in
+   `.github/workflows/ci.yml` runs the same checks again. By the time it
+   runs, a real leak is already pushed — public, indexed, possibly cloned —
+   and the only remedy left is a history rewrite (a sibling project had to
+   do exactly this, across 14 commits, after a fixture with a real client
+   name slipped through). CI exists only to catch a commit made with
+   `--no-verify`, or a clone that skipped `make install-hooks` — it is the
+   last line of defence, not the first, and should never be treated as a
+   reason the hook is redundant.
+
+**Never hand-edit a fixture** to patch a flagged line. It isn't a fix: the
+next capture silently overwrites the hand edit anyway, and in the meantime
+you've likely just moved the same real data somewhere the checks don't
+happen to look. Re-run `scripts/capture-fixture.sh` instead.

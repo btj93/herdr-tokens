@@ -17,6 +17,17 @@ jobs:
       - run: go test -race ./...
       - run: go build ./...
 
+  # BACKSTOP, not the primary defence. Fixture sanitisation is enforced in
+  # two earlier layers before anything reaches this job: scripts/capture-
+  # fixture.sh sanitizes at capture time, and the tracked .githooks/pre-commit
+  # hook (installed via `make install-hooks`) blocks an unsanitized fixture
+  # from entering *local* history in the first place. By the time this job
+  # runs, a leak is already on GitHub -- public, indexed, possibly cloned --
+  # and the only remedy left is a history rewrite. This job exists purely to
+  # catch the case where someone committed with `--no-verify` or cloned the
+  # repo without ever running `make install-hooks`. Do not treat it as
+  # redundant with the hook and remove the hook; it is the last line, not
+  # the first.
   fixtures-are-sanitized:
     runs-on: ubuntu-latest
     steps:
