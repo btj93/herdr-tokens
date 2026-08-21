@@ -2,12 +2,14 @@ package herdrapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,10 +45,61 @@ func fakeServer(t *testing.T, reply func(req map[string]any) string) string {
 	return sock
 }
 
+// fakeServerBlocking accepts exactly one connection, reads the request, and
+// then blocks (never writes a response, never closes) until the test
+// cleans up. It simulates a stuck peer so a call cancelled via
+// context.WithCancel (no deadline) can be proven to unblock promptly,
+// rather than hanging on the read until something else acts.
+func fakeServerBlocking(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "h.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop); ln.Close(); os.Remove(sock) })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		bufio.NewReader(conn).ReadBytes('\n')
+		<-stop
+	}()
+	return sock
+}
+
+// compactFixture returns the on-disk fixture as compact (single-line) JSON,
+// matching Herdr's real wire format: compact JSON, one response per
+// connection, terminated by exactly one trailing '\n' that never appears
+// earlier in the body (confirmed directly against the live server). The
+// fixture on disk is pretty-printed for readability/diffing; splicing it in
+// verbatim would make the fake server emit multi-line frames the real
+// server never sends — a harness bug in the opposite direction from an
+// inaccurate fixture, making the test MORE permissive than reality.
+func compactFixture(t *testing.T) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, fixtureBytes(t)); err != nil {
+		t.Fatalf("compact fixture: %v", err)
+	}
+	if bytes.ContainsRune(buf.Bytes(), '\n') {
+		t.Fatal("compacted fixture still contains a raw newline")
+	}
+	return buf.String()
+}
+
 func TestSnapshotUnwrapsNestedEnvelope(t *testing.T) {
-	body := string(fixtureBytes(t))
+	body := compactFixture(t)
 	sock := fakeServer(t, func(req map[string]any) string {
-		return `{"id":"1","result":` + body + `}`
+		reply := `{"id":"1","result":` + body + `}`
+		if n := strings.Count(reply, "\n"); n != 0 {
+			t.Fatalf("reply contains %d embedded newlines before framing; want 0 (fakeServer appends the sole terminator)", n)
+		}
+		return reply
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -115,5 +168,30 @@ func TestReportWorkspaceMetadataSendsNullsAndTTL(t *testing.T) {
 	v, ok := tk["st_idle"]
 	if !ok || v != nil {
 		t.Fatalf("st_idle = %v, want explicit null", v)
+	}
+}
+
+// TestSnapshotCancelsWithoutDeadline proves that a context cancelled via
+// context.WithCancel (no deadline) still unblocks an in-flight call
+// promptly. SetDeadline alone only reacts to an explicit ctx.Deadline();
+// without a watcher on ctx.Done(), a blocked read on a stuck peer would
+// hang until the peer acted, cancellation or not.
+func TestSnapshotCancelsWithoutDeadline(t *testing.T) {
+	sock := fakeServerBlocking(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := NewClient(sock).Snapshot(ctx)
+		errCh <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the call block on the read
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Snapshot did not return promptly after context cancellation without a deadline")
 	}
 }

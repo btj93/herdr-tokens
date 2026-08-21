@@ -1,13 +1,14 @@
 package herdrapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync/atomic"
+	"time"
 )
 
 // ErrEmptySnapshot marks a decode that produced no workspaces. Herdr always
@@ -41,26 +42,52 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 		conn.SetDeadline(deadline)
 	}
 
+	// SetDeadline above only protects the deadline case. A context cancelled
+	// via context.WithCancel (no deadline) would otherwise leave a blocked
+	// read/write completely unprotected: cancel() alone never touches the
+	// socket. Watch ctx.Done() for the lifetime of this call and force an
+	// immediate deadline the instant it fires, so a blocked read returns
+	// promptly instead of waiting on the peer.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.SetDeadline(time.Now())
+		case <-done:
+		}
+	}()
+
 	id := fmt.Sprintf("herdr-tokens-%d", c.seq.Add(1))
 	req, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
 	if err != nil {
 		return fmt.Errorf("herdrapi: marshal %s: %w", method, err)
 	}
 	if _, err := conn.Write(append(req, '\n')); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdrapi: %s: %w", method, ctx.Err())
+		}
 		return fmt.Errorf("herdrapi: write %s: %w", method, err)
 	}
 
-	// Herdr writes exactly one response and then closes the connection (see
-	// call's doc comment), so EOF is the reliable end-of-message signal.
-	// Reading only up to the first '\n' is unsafe: a response payload can
-	// itself contain literal newlines (e.g. pretty-printed JSON), which would
-	// truncate the message before this point rather than at its real end.
-	data, err := io.ReadAll(conn)
-	if err != nil && len(data) == 0 {
+	// Herdr's wire format is compact (single-line) JSON: exactly one
+	// response per connection, terminated by exactly one '\n', which never
+	// appears earlier in the body. Confirmed directly against the live
+	// server: a captured session.snapshot response was ~20KB with exactly
+	// one embedded newline, at the very last byte, followed by the peer
+	// closing the connection. The newline is therefore both necessary and
+	// sufficient as the frame terminator — do not build buffering or
+	// multi-message logic here on an assumption of pretty-printed or
+	// multi-line responses; the protocol never sends those.
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdrapi: %s: %w", method, ctx.Err())
+		}
 		return fmt.Errorf("herdrapi: read %s: %w", method, err)
 	}
 	var res response
-	if err := json.Unmarshal(data, &res); err != nil {
+	if err := json.Unmarshal(line, &res); err != nil {
 		return fmt.Errorf("herdrapi: decode %s: %w", method, err)
 	}
 	if res.Error != nil {
