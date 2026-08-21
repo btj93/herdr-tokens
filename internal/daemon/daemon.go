@@ -44,19 +44,34 @@ func ReadPID(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
+// defaultBaseBackoff and defaultMaxBackoff are Run's real, production
+// backoff schedule. They are constants at the call site, not tunables: the
+// only reason they are threaded through run as parameters at all is so
+// internal/daemon/run_test.go can drive the doubling/cap/reset sequence in
+// milliseconds instead of literally sleeping seconds. Run's exported
+// signature is unchanged; run is unexported and reachable only from within
+// this package (including its own tests).
+const (
+	defaultBaseBackoff = 250 * time.Millisecond
+	defaultMaxBackoff  = 5 * time.Second
+)
+
 // Run polls on a single ticker until ctx ends. It subscribes to no events:
 // the TTL refresh the daemon already owes doubles as the poll, which removes
 // the metadata feedback loop, the pane.updated firehose, and per-pane
 // subscription lifecycle entirely.
 func Run(ctx context.Context, cfg config.Config, socket string) error {
+	return run(ctx, cfg, socket, defaultBaseBackoff, defaultMaxBackoff)
+}
+
+func run(ctx context.Context, cfg config.Config, socket string, baseBackoff, maxBackoff time.Duration) error {
 	client := herdrapi.NewClient(socket)
 	ctrl := controller.New(cfg, client)
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 
-	backoff := 250 * time.Millisecond
-	const maxBackoff = 5 * time.Second
+	backoff := baseBackoff
 
 	// sawFailure tracks whether the most recent snapshot attempt(s) failed.
 	// A Herdr restart always makes the socket disappear out from under us,
@@ -85,7 +100,7 @@ func Run(ctx context.Context, cfg config.Config, socket string) error {
 			}
 			continue
 		}
-		backoff = 250 * time.Millisecond
+		backoff = baseBackoff
 
 		if sawFailure {
 			// The first successful snapshot after one or more failures: Herdr
