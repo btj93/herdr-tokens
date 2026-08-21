@@ -2,6 +2,7 @@ package herdrapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/user"
 	"regexp"
@@ -18,6 +19,15 @@ func fixtureBytes(t *testing.T) []byte {
 	return b
 }
 
+// TestFixtureContainsNoRealUsername compares the fixture against the
+// username of whoever RUNS this test, not the username that was active when
+// the fixture was CAPTURED. On CI the runner's account (e.g. "runner") will
+// essentially never match an arbitrary contributor's real username, so this
+// test passes even against a fixture that leaked someone else's name — it is
+// a convenience re-check for local re-captures, not the guard that makes
+// this fixture safe to publish. TestFixtureHasOnlyPlaceholderPaths below is
+// the capture-machine-independent guard; do not treat this test as
+// sufficient on its own.
 func TestFixtureContainsNoRealUsername(t *testing.T) {
 	u, err := user.Current()
 	if err != nil {
@@ -49,6 +59,49 @@ func TestFixtureHasNoTildePaths(t *testing.T) {
 			t.Fatalf("fixture leaks tilde path %q", m)
 		}
 	}
+}
+
+// TestFixtureHasOnlyPlaceholderPaths recursively walks the ENTIRE decoded
+// fixture — every map value and slice element, at any depth, regardless of
+// field name — and asserts that any string beginning with /Users/ or ~/
+// matches the exact placeholder shape. This is a positive shape assertion,
+// not a substring check keyed to a fixed list of fields: a future Herdr
+// version that adds a path anywhere in the tree (a new collection, a
+// history entry, a nested struct) is caught here automatically instead of
+// silently leaking until someone remembers to special-case that field. It
+// also does not depend on who runs it or which machine captured the
+// fixture, unlike TestFixtureContainsNoRealUsername above.
+func TestFixtureHasOnlyPlaceholderPaths(t *testing.T) {
+	usersRe := regexp.MustCompile(`^/Users/user/projects/proj\d+$`)
+
+	var doc any
+	if err := json.Unmarshal(fixtureBytes(t), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var walk func(path string, node any)
+	walk = func(path string, node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			for k, val := range v {
+				walk(path+"."+k, val)
+			}
+		case []any:
+			for i, val := range v {
+				walk(fmt.Sprintf("%s[%d]", path, i), val)
+			}
+		case string:
+			if strings.HasPrefix(v, "/Users/") && !usersRe.MatchString(v) {
+				t.Errorf("%s = %q is a /Users/ path not in placeholder shape "+
+					"/Users/user/projects/projN; re-record with scripts/capture-fixture.sh", path, v)
+			}
+			if strings.HasPrefix(v, "~/") && v != "~/projects/app" {
+				t.Errorf("%s = %q is a tilde path not equal to the placeholder ~/projects/app; "+
+					"re-record with scripts/capture-fixture.sh", path, v)
+			}
+		}
+	}
+	walk("$", doc)
 }
 
 // Title fields are the leak that username and path guards cannot see: they

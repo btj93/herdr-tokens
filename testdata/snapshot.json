@@ -132,9 +132,9 @@
           "value": "00000000-0000-4000-8000-000000000002"
         },
         "agent_status": "idle",
-        "cwd": "/Users/user/projects/proj4",
+        "cwd": "/Users/user/projects/proj3",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj4",
+        "foreground_cwd": "/Users/user/projects/proj3",
         "pane_id": "w5:pA",
         "revision": 0,
         "state_change_seq": 12,
@@ -151,9 +151,9 @@
           "value": "00000000-0000-4000-8000-000000000007"
         },
         "agent_status": "idle",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:p1",
         "revision": 15,
         "state_change_seq": 0,
@@ -172,9 +172,9 @@
           "value": "00000000-0000-4000-8000-000000000009"
         },
         "agent_status": "done",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:pK",
         "revision": 14,
         "state_change_seq": 7402,
@@ -193,12 +193,12 @@
           "value": "00000000-0000-4000-8000-000000000003"
         },
         "agent_status": "working",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:p1F",
         "revision": 4,
-        "state_change_seq": 7721,
+        "state_change_seq": 8201,
         "tab_id": "w3:t1",
         "terminal_id": "term_000000000017",
         "terminal_title": "agent",
@@ -853,9 +853,9 @@
       },
       {
         "agent_status": "unknown",
-        "cwd": "/Users/user/projects/proj3",
+        "cwd": "/Users/user/projects/proj5",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj3",
+        "foreground_cwd": "/Users/user/projects/proj5",
         "pane_id": "w5:p4",
         "revision": 0,
         "scroll": {
@@ -876,9 +876,9 @@
           "value": "00000000-0000-4000-8000-000000000002"
         },
         "agent_status": "idle",
-        "cwd": "/Users/user/projects/proj4",
+        "cwd": "/Users/user/projects/proj3",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj4",
+        "foreground_cwd": "/Users/user/projects/proj3",
         "pane_id": "w5:pA",
         "revision": 0,
         "scroll": {
@@ -892,9 +892,9 @@
       },
       {
         "agent_status": "unknown",
-        "cwd": "/Users/user/projects/proj5",
+        "cwd": "/Users/user/projects/proj6",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj5",
+        "foreground_cwd": "/Users/user/projects/proj6",
         "pane_id": "w3:pA",
         "revision": 0,
         "scroll": {
@@ -915,9 +915,9 @@
           "value": "00000000-0000-4000-8000-000000000007"
         },
         "agent_status": "idle",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:p1",
         "revision": 15,
         "scroll": {
@@ -940,9 +940,9 @@
           "value": "00000000-0000-4000-8000-000000000009"
         },
         "agent_status": "done",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:pK",
         "revision": 14,
         "scroll": {
@@ -965,9 +965,9 @@
           "value": "00000000-0000-4000-8000-000000000003"
         },
         "agent_status": "working",
-        "cwd": "/Users/user/projects/proj6",
+        "cwd": "/Users/user/projects/proj4",
         "focused": false,
-        "foreground_cwd": "/Users/user/projects/proj6",
+        "foreground_cwd": "/Users/user/projects/proj4",
         "pane_id": "w3:p1F",
         "revision": 4,
         "scroll": {

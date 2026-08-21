@@ -19,11 +19,28 @@ def project(path):
         names[base] = f"proj{len(names)+1}"
     return names[base]
 
-for coll in ("panes", "agents"):
-    for rec in result["snapshot"].get(coll, []):
-        for k in ("cwd", "foreground_cwd"):
-            if rec.get(k):
-                rec[k] = "/Users/user/projects/" + project(rec[k])
+def scrub_paths(node):
+    # Recursively replace ANY string beginning with /Users/ or ~/ with a
+    # placeholder of the correct shape, at ANY depth and regardless of
+    # field name. A fixed list of fields (cwd, foreground_cwd, ...) only
+    # protects the fields someone remembered to name; a future Herdr field
+    # that carries a path anywhere in the tree (a new collection, a history
+    # entry, a nested struct) is caught here automatically instead of
+    # silently leaking until the next incident. project() is reused so the
+    # same input path keeps mapping to the same projN placeholder wherever
+    # it recurs.
+    if isinstance(node, dict):
+        return {k: scrub_paths(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [scrub_paths(v) for v in node]
+    if isinstance(node, str):
+        if node.startswith("/Users/"):
+            return "/Users/user/projects/" + project(node)
+        if node.startswith("~/"):
+            return "~/projects/app"
+    return node
+
+result = scrub_paths(result)
 
 # Title fields are scrubbed across EVERY collection that can carry them.
 # These leak in-flight task descriptions and client project names verbatim
