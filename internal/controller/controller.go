@@ -34,6 +34,23 @@ func New(cfg config.Config, rep Reporter) *Controller {
 // Tracked reports how many workspaces have a recorded successful write.
 func (c *Controller) Tracked() int { return len(c.last) }
 
+// Invalidate drops the entire write-skip cache, forcing the next Reconcile
+// to write every workspace regardless of whether its token set looks
+// unchanged and fresh.
+//
+// This exists for the case a bare unchanged/fresh check cannot see: a Herdr
+// restart drops Herdr's own in-memory workspace metadata, but this
+// Controller's `last` map has no way to know that on its own, so without
+// Invalidate the daemon would skip rewriting an unchanged-looking token set
+// for up to HeartbeatAge() after Herdr comes back -- leaving the sidebar
+// nameless the whole time, contrary to the "recovers within one tick"
+// guarantee. Callers should invoke this on the first successful snapshot
+// following one or more consecutive snapshot failures, since a Herdr
+// restart always produces at least one such failure (the socket goes away).
+func (c *Controller) Invalidate() {
+	c.last = map[string]record{}
+}
+
 // Reconcile derives the desired tokens for every workspace and writes those
 // that changed or whose last write is older than ttl/3.
 //

@@ -165,6 +165,12 @@ and yields these defaults:
 
 Colours are never set here — see "What it does" above.
 
+**Config changes require a restart.** `config.toml` is read once, at daemon
+startup, not watched or hot-reloaded. Editing it while the daemon is already
+running has no effect on that running daemon; the new values take effect only
+on the next `herdr-tokens stop && herdr-tokens start` (or the equivalent
+`stop`/`start` plugin actions from Herdr's action picker).
+
 ## Failure behaviour
 
 If the daemon stops for any reason — crash, `stop`, a Herdr restart before

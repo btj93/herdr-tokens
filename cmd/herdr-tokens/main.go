@@ -138,12 +138,29 @@ func runDaemon() int {
 // recycled by an unrelated process, so it can never safely answer "is a
 // daemon running". The lock cannot go stale that way: the OS drops it the
 // instant the holder exits, for any reason.
+//
+// Two failure modes this used to have, both silent:
+//
+//   - A typo in config.toml used to be discovered only by the freshly
+//     spawned child, inside runDaemon, which exits 2 on it -- but start()
+//     never checked the child's exit status, so it printed "started (pid
+//     N)" and returned 0 regardless. The child died instantly and nothing
+//     here ever noticed. Fixed by loading the config here, before spawning,
+//     so an invalid config is reported by start() itself and no child that
+//     is guaranteed to die is ever spawned.
+//   - cmd.Stdout/cmd.Stderr were never set, so Go wired both to /dev/null:
+//     every log.Printf inside daemon.Run (snapshot failures, reconcile
+//     errors) was discarded, with no way to ever see it. Fixed by
+//     redirecting both to a per-socket log file, whose path is also echoed
+//     back in the "started" message so a user has somewhere to look.
 func start() int {
 	sock, err := daemon.SocketPath()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	logPath := daemon.StateFile(stateDir(), sock, "daemon.log")
+
 	lockPath := daemon.StateFile(stateDir(), sock, "daemon.lock")
 	lock, err := daemon.AcquireLock(lockPath)
 	if err != nil {
@@ -152,6 +169,7 @@ func start() int {
 			return 0
 		}
 		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "log:", logPath)
 		return 1
 	}
 	// Nobody was running. Release immediately so the child we are about to
@@ -160,19 +178,43 @@ func start() int {
 	// doesn't exist.
 	lock.Close()
 
+	// Load the config BEFORE spawning. runDaemon (which the child runs)
+	// exits 2 on an invalid config; loading it here first means an invalid
+	// config is reported by start() itself, with the same exit code, and no
+	// child that is certain to die on startup is ever spawned.
+	if _, err := config.Load(configPath()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "log:", logPath)
+		return 2
+	}
+
 	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "log:", logPath)
+		return 1
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	defer logFile.Close()
+
 	cmd := exec.Command(exe, "daemon")
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Every log.Printf in daemon.Run -- snapshot failures, reconcile errors
+	// -- would otherwise go to /dev/null, the same silence this fix closes.
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "log:", logPath)
 		return 1
 	}
-	fmt.Printf("started (pid %d)\n", cmd.Process.Pid)
+	fmt.Printf("started (pid %d), log: %s\n", cmd.Process.Pid, logPath)
 	return 0
 }
 
@@ -188,6 +230,8 @@ func stop() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	logPath := daemon.StateFile(stateDir(), sock, "daemon.log")
+
 	lockPath := daemon.StateFile(stateDir(), sock, "daemon.lock")
 	lock, err := daemon.AcquireLock(lockPath)
 	if err == nil {
@@ -197,6 +241,7 @@ func stop() int {
 	}
 	if !errors.Is(err, daemon.ErrAlreadyRunning) {
 		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "log:", logPath)
 		return 1
 	}
 

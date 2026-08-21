@@ -58,6 +58,13 @@ func Run(ctx context.Context, cfg config.Config, socket string) error {
 	backoff := 250 * time.Millisecond
 	const maxBackoff = 5 * time.Second
 
+	// sawFailure tracks whether the most recent snapshot attempt(s) failed.
+	// A Herdr restart always makes the socket disappear out from under us,
+	// so it always produces at least one snapshot failure -- that is the
+	// reliable signal that the process on the other end may have forgotten
+	// everything it knew, even though our own write-skip cache has not.
+	sawFailure := false
+
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, cfg.PollInterval)
 		snap, err := client.Snapshot(callCtx)
@@ -67,6 +74,7 @@ func Run(ctx context.Context, cfg config.Config, socket string) error {
 			// A zero-valued decode is an error, never an empty session, so we
 			// log and skip rather than concluding there is nothing to do.
 			log.Printf("snapshot failed, retrying in %v: %v", backoff, err)
+			sawFailure = true
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -78,6 +86,17 @@ func Run(ctx context.Context, cfg config.Config, socket string) error {
 			continue
 		}
 		backoff = 250 * time.Millisecond
+
+		if sawFailure {
+			// The first successful snapshot after one or more failures: Herdr
+			// may have just restarted and lost its own in-memory workspace
+			// metadata. Our cache doesn't know that on its own, so drop it
+			// and let Reconcile write fresh, even for a token set that still
+			// looks unchanged -- otherwise the sidebar would stay nameless
+			// for up to HeartbeatAge() after Herdr is already back.
+			ctrl.Invalidate()
+			sawFailure = false
+		}
 
 		writeCtx, cancel := context.WithTimeout(ctx, cfg.PollInterval)
 		if _, err := ctrl.Reconcile(writeCtx, snap, time.Now()); err != nil {

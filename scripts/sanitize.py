@@ -42,6 +42,35 @@ def scrub_paths(node):
 
 result = scrub_paths(result)
 
+session_ids = {}
+terminal_ids = {}
+def mapped(store, prefix, value):
+    # Deterministic per-value placeholder, reused for identical inputs
+    # wherever they recur (mirrors project() above).
+    if value not in store:
+        store[value] = f"{prefix}-{len(store)+1}"
+    return store[value]
+
+def scrub_ids(node):
+    # Recursively replace every `agent_session.value` and every
+    # `terminal_id`, at ANY depth, the same way scrub_paths handles paths
+    # above: these are real, live session and terminal identifiers -- not
+    # names or paths, so the username/path guards never touch them, but
+    # they are exactly the kind of residue a fixture must not carry.
+    if isinstance(node, dict):
+        sess = node.get("agent_session")
+        if isinstance(sess, dict) and isinstance(sess.get("value"), str):
+            sess["value"] = mapped(session_ids, "session", sess["value"])
+        if isinstance(node.get("terminal_id"), str):
+            node["terminal_id"] = mapped(terminal_ids, "term", node["terminal_id"])
+        for v in node.values():
+            scrub_ids(v)
+    elif isinstance(node, list):
+        for v in node:
+            scrub_ids(v)
+
+scrub_ids(result)
+
 # Title fields are scrubbed across EVERY collection that can carry them.
 # These leak in-flight task descriptions and client project names verbatim
 # ("orders-api: nvim", "Refactor the payment retry") and are

@@ -298,6 +298,51 @@ while IFS= read -r f; do
 		done <"$tmp/cand4"
 		;;
 	esac
+
+	# --- Rule 5: no UUID-shaped value (8-4-4-4-12 hex) anywhere. Real
+	# agent_session.value identifiers have exactly this shape;
+	# scripts/sanitize.py's session-N placeholders do not (no hyphens in
+	# that shape), so unlike rules 1/2/3 there is no placeholder value to
+	# exempt -- any match here is unconditionally bad.
+	set +e
+	grep -nE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$blob" >"$tmp/cand5" 2>"$tmp/cand5.err"
+	rc=$?
+	set -e
+	require_ok "$rc" "0 1" "grep (rule 5, UUID-shaped value) failed scanning $f" || continue
+	while IFS=: read -r lineno rest; do
+		[ -n "$lineno" ] || continue
+		set +e
+		printf '%s\n' "$rest" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' >"$tmp/tok5" 2>"$tmp/tok5.err"
+		rc=$?
+		set -e
+		require_ok "$rc" "0 1" "grep (rule 5 token extraction) failed scanning $f line $lineno" || continue
+		while IFS= read -r tok; do
+			[ -n "$tok" ] || continue
+			report "$f" "$lineno" "LIVE_SESSION_ID" "found $tok (UUID-shaped identifier; must be scrubbed to session-N by scripts/sanitize.py)"
+		done <"$tmp/tok5"
+	done <"$tmp/cand5"
+
+	# --- Rule 6: no term_-prefixed identifier anywhere. Real terminal_id
+	# values look like "term_00000000abcd"; scripts/sanitize.py's term-N
+	# placeholders use a hyphen, not an underscore, so this is also an
+	# unconditional denylist with no placeholder to exempt.
+	set +e
+	grep -nF '"term_' "$blob" >"$tmp/cand6" 2>"$tmp/cand6.err"
+	rc=$?
+	set -e
+	require_ok "$rc" "0 1" "grep (rule 6, term_ identifier) failed scanning $f" || continue
+	while IFS=: read -r lineno rest; do
+		[ -n "$lineno" ] || continue
+		set +e
+		printf '%s\n' "$rest" | grep -oE '"term_[^"]*"' >"$tmp/tok6" 2>"$tmp/tok6.err"
+		rc=$?
+		set -e
+		require_ok "$rc" "0 1" "grep (rule 6 token extraction) failed scanning $f line $lineno" || continue
+		while IFS= read -r tok; do
+			[ -n "$tok" ] || continue
+			report "$f" "$lineno" "LIVE_TERMINAL_ID" "found $tok (term_-prefixed terminal identifier; must be scrubbed to term-N by scripts/sanitize.py)"
+		done <"$tmp/tok6"
+	done <"$tmp/cand6"
 done <"$tmp/staged"
 
 if [ -f "$tmp/failed" ]; then

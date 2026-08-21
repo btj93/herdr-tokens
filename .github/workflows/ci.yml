@@ -32,28 +32,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: No home paths other than /Users/user
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      # COARSE PRE-FILTER ONLY, not the guard. Each grep below inspects a
+      # single extracted TOKEN (e.g. only the path segment immediately
+      # after "/Users/"), never the whole decoded JSON string value. That
+      # means something like "/Users/user/work/<client>" passes every one
+      # of these checks: the extracted token is "/Users/user", which
+      # matches the allowed value, and nothing here ever looks at what
+      # comes after it. These greps exist only to fail fast and cheaply on
+      # the common case; they are deliberately weaker than the real guard,
+      # which is the step below.
+      - name: (pre-filter) No home paths other than /Users/user
         run: |
           if grep -rEo '/Users/[^"/]+' testdata/ | grep -v '/Users/user$'; then
             echo "::error::testdata leaks a real home path"
             exit 1
           fi
-      - name: No absolute home paths in any committed fixture
+      - name: (pre-filter) No absolute home paths in any committed fixture
         run: |
           if grep -rE '/home/[^"/]+' testdata/ | grep -vE '/home/(user|runner)'; then
             echo "::error::testdata leaks a real home path"
             exit 1
           fi
-      - name: No tilde-form paths
+      - name: (pre-filter) No tilde-form paths
         run: |
           if grep -roE '~/[A-Za-z0-9_./-]+' testdata/ | grep -v '~/projects/app$'; then
             echo "::error::testdata leaks a tilde-form path"
             exit 1
           fi
-      - name: Titles are generic
+      - name: (pre-filter) Titles are generic
         run: |
           if grep -roE '"terminal_title[^"]*": "[^"]*"' testdata/ \
              | grep -vE ': "(shell|agent|nvim|)"$'; then
             echo "::error::testdata leaks a terminal title"
             exit 1
           fi
+      # AUTHORITATIVE CHECK. internal/herdrapi/fixture_test.go decodes the
+      # WHOLE fixture and recursively asserts the exact shape of every
+      # string value at every depth (paths, tilde-paths, titles, and the
+      # UUID/term_ live-identifier check) -- not a token extracted from a
+      # single line. That recursive shape assertion, not the greps above,
+      # is what actually decides whether a fixture is safe to publish; the
+      # greps are a coarse, cheap pre-filter and nothing more.
+      - name: Run authoritative fixture-shape assertions (Go tests)
+        run: go test ./internal/herdrapi/... -run '^TestFixture' -v

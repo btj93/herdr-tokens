@@ -77,6 +77,25 @@ func TestChangeWritesImmediately(t *testing.T) {
 	}
 }
 
+// A Herdr restart drops Herdr's own in-memory metadata but this daemon's
+// write-skip cache does not know that; Invalidate is the mechanism that
+// forces a rewrite anyway even though the token set still looks unchanged
+// and fresh.
+func TestInvalidateForcesRewriteEvenWhenUnchangedAndFresh(t *testing.T) {
+	r := &fakeReporter{}
+	c := New(config.Default(), r)
+	t0 := time.Now()
+	c.Reconcile(context.Background(), snapWith(ptr("idle")), t0)
+	c.Invalidate()
+	n, _ := c.Reconcile(context.Background(), snapWith(ptr("idle")), t0.Add(time.Second))
+	if n != 1 {
+		t.Fatalf("wrote %d, want 1: Invalidate must force a rewrite despite an unchanged, fresh token set", n)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("%d writes, want 2 (initial + post-Invalidate)", len(r.calls))
+	}
+}
+
 func TestClosedWorkspaceIsPruned(t *testing.T) {
 	r := &fakeReporter{}
 	c := New(config.Default(), r)

@@ -145,6 +145,46 @@ func TestFixtureTitlesAreGeneric(t *testing.T) {
 	check("tabs", doc.Snapshot.Tabs)
 }
 
+// TestFixtureHasNoLiveSessionOrTerminalIDs recursively walks the entire
+// decoded fixture and fails on any string that is UUID-shaped (the shape
+// agent_session.value carries) or that starts with "term_" (the shape a
+// real terminal_id carries). These are neither names nor paths, so the
+// username and path guards above never see them, but they are exactly the
+// live-machine residue scripts/sanitize.py's agent_session/terminal_id
+// scrub exists to remove -- 30 such values were found in a single capture
+// before that scrub existed, one of them the identifier of the very
+// session that produced this fixture.
+func TestFixtureHasNoLiveSessionOrTerminalIDs(t *testing.T) {
+	uuidRe := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+	var doc any
+	if err := json.Unmarshal(fixtureBytes(t), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var walk func(path string, node any)
+	walk = func(path string, node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			for k, val := range v {
+				walk(path+"."+k, val)
+			}
+		case []any:
+			for i, val := range v {
+				walk(fmt.Sprintf("%s[%d]", path, i), val)
+			}
+		case string:
+			if uuidRe.MatchString(v) {
+				t.Errorf("%s = %q is a UUID-shaped value; re-record with scripts/capture-fixture.sh", path, v)
+			}
+			if strings.HasPrefix(v, "term_") {
+				t.Errorf("%s = %q is a real-looking terminal_id (term_ prefixed); re-record with scripts/capture-fixture.sh", path, v)
+			}
+		}
+	}
+	walk("$", doc)
+}
+
 func TestFixtureIsWholeResultEnvelope(t *testing.T) {
 	s := string(fixtureBytes(t))
 	if !strings.Contains(s, `"type": "session_snapshot"`) {
