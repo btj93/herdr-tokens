@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/btj93/herdr-tokens/internal/config"
@@ -108,4 +109,36 @@ func SocketPath() (string, error) {
 	return p, nil
 }
 
+// ErrAlreadyRunning is returned by AcquireLock when another process already
+// holds the daemon lock for this socket.
 var ErrAlreadyRunning = errors.New("daemon: already running")
+
+// AcquireLock takes an exclusive, non-blocking advisory (flock) lock on
+// path, creating the file if necessary. The OS releases the lock
+// automatically when the holding process exits for ANY reason -- including
+// SIGKILL and power loss -- which is exactly why the lock, not a PID file,
+// is the liveness oracle here: a PID file can outlive its process (never
+// cleaned up after a kill -9) and the PID it names can later be recycled by
+// an unrelated process, but the lock cannot go "stale" the way a PID file
+// can.
+//
+// On success the returned *os.File must be kept open for as long as the
+// lock should be held; closing it (or process exit) releases it
+// immediately. On contention it returns (nil, ErrAlreadyRunning).
+func AcquireLock(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrAlreadyRunning
+		}
+		return nil, err
+	}
+	return f, nil
+}

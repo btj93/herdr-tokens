@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -102,6 +103,22 @@ func runDaemon() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+
+	// The lock, held for the entire process lifetime, is the sole liveness
+	// oracle: if another daemon for this socket already holds it, that
+	// daemon won the race and we quietly step aside rather than running a
+	// second poller against the same workspaces.
+	lockPath := daemon.StateFile(stateDir(), sock, "daemon.lock")
+	lock, err := daemon.AcquireLock(lockPath)
+	if err != nil {
+		if errors.Is(err, daemon.ErrAlreadyRunning) {
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer lock.Close()
+
 	pidPath := daemon.StateFile(stateDir(), sock, "daemon.pid")
 	if err := daemon.WritePID(pidPath); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -115,20 +132,34 @@ func runDaemon() int {
 	return 0
 }
 
-// start is idempotent: an existing live daemon for this socket is left alone.
+// start is idempotent: an existing live daemon for this socket is left
+// alone. Liveness is decided by the lock, not the PID file -- a PID file can
+// survive its process (never cleaned up after a kill -9) and its PID can be
+// recycled by an unrelated process, so it can never safely answer "is a
+// daemon running". The lock cannot go stale that way: the OS drops it the
+// instant the holder exits, for any reason.
 func start() int {
 	sock, err := daemon.SocketPath()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	pidPath := daemon.StateFile(stateDir(), sock, "daemon.pid")
-	if pid, err := daemon.ReadPID(pidPath); err == nil {
-		if p, err := os.FindProcess(pid); err == nil && p.Signal(syscall.Signal(0)) == nil {
-			fmt.Printf("already running (pid %d)\n", pid)
+	lockPath := daemon.StateFile(stateDir(), sock, "daemon.lock")
+	lock, err := daemon.AcquireLock(lockPath)
+	if err != nil {
+		if errors.Is(err, daemon.ErrAlreadyRunning) {
+			fmt.Println("already running")
 			return 0
 		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
+	// Nobody was running. Release immediately so the child we are about to
+	// spawn can win the lock itself; holding it here would make the child's
+	// own AcquireLock fail and cause it to step aside from a race that
+	// doesn't exist.
+	lock.Close()
+
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -145,13 +176,30 @@ func start() int {
 	return 0
 }
 
-// stop signals only the daemon belonging to this socket.
+// stop signals only the daemon belonging to this socket. It never signals
+// based on the PID file alone: the file can name a live but unrelated
+// process once its original PID has been recycled by the OS. The lock is
+// consulted first -- if it can be acquired, nothing is running (a stale PID
+// file, if any, is ignored and nothing is signalled); only lock contention
+// (a real daemon holding it) leads to reading the PID file and signalling.
 func stop() int {
 	sock, err := daemon.SocketPath()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	lockPath := daemon.StateFile(stateDir(), sock, "daemon.lock")
+	lock, err := daemon.AcquireLock(lockPath)
+	if err == nil {
+		lock.Close()
+		fmt.Println("not running")
+		return 0
+	}
+	if !errors.Is(err, daemon.ErrAlreadyRunning) {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	pidPath := daemon.StateFile(stateDir(), sock, "daemon.pid")
 	pid, err := daemon.ReadPID(pidPath)
 	if err != nil {
