@@ -1,0 +1,48 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go test -race ./...
+      - run: go build ./...
+
+  fixtures-are-sanitized:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No home paths other than /Users/user
+        run: |
+          if grep -rEo '/Users/[^"/]+' testdata/ | grep -v '/Users/user$'; then
+            echo "::error::testdata leaks a real home path"
+            exit 1
+          fi
+      - name: No absolute home paths in any committed fixture
+        run: |
+          if grep -rE '/home/[^"/]+' testdata/ | grep -vE '/home/(user|runner)'; then
+            echo "::error::testdata leaks a real home path"
+            exit 1
+          fi
+      - name: No tilde-form paths
+        run: |
+          if grep -roE '~/[A-Za-z0-9_./-]+' testdata/ | grep -v '~/projects/app$'; then
+            echo "::error::testdata leaks a tilde-form path"
+            exit 1
+          fi
+      - name: Titles are generic
+        run: |
+          if grep -roE '"terminal_title[^"]*": "[^"]*"' testdata/ \
+             | grep -vE ': "(shell|agent|nvim|)"$'; then
+            echo "::error::testdata leaks a terminal title"
+            exit 1
+          fi
