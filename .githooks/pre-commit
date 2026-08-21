@@ -15,6 +15,26 @@
 # afterwards must still be caught, because it is the staged content that
 # actually gets committed.
 #
+# FAIL CLOSED, not open. An earlier version of this hook treated any
+# non-zero exit from grep -- "no match" (1), "binary/NUL input" (also 1 on
+# most greps, without even scanning), a genuine error (2+), or "grep isn't
+# on PATH at all" -- as equally meaning "this file is clean". That let a
+# staged file containing a real client path through as long as it also
+# contained a NUL byte, because the NUL byte made grep bail out before it
+# ever looked at the text. A guard that can be silently switched off by a
+# stray byte, or by a broken toolchain, is worse than no guard: it produces
+# false confidence. So, throughout this script:
+#   - every external command it needs is checked present on PATH up front;
+#     a missing one refuses the commit, it does not skip the check.
+#   - every grep whose result is a security decision has its exit status
+#     captured explicitly; only 0 (matched) and 1 (genuinely no match) are
+#     treated as meaningful, anything else refuses the commit.
+#   - every staged testdata/ file is explicitly checked for NUL bytes
+#     before any text tool ever touches it (testdata/ is JSON by
+#     definition; a NUL byte there is both unscannable and not something
+#     scripts/capture-fixture.sh would ever produce), and a NUL byte
+#     refuses the commit rather than being silently skipped or stripped.
+#
 # POSIX sh only, and deliberately avoids GNU-only regex behaviour (e.g. a
 # trailing empty alternative in an ERE such as `(shell|agent|nvim|)$`) since
 # this runs on whatever grep a developer's machine has -- BSD grep, a ugrep
@@ -23,33 +43,150 @@
 
 set -eu
 
+# --- Dependency preflight --------------------------------------------------
+# Refuse rather than silently skip verification if any tool this hook needs
+# is missing. `command -v` also catches the case where a name resolves to
+# something that isn't actually executable.
+for dep in git mktemp id grep sed tr wc rm printf; do
+	if ! command -v "$dep" >/dev/null 2>&1; then
+		printf 'pre-commit: required command "%s" not found on PATH -- refusing to commit\n' "$dep" >&2
+		printf '(cannot verify testdata/ fixtures are sanitized without it; fix PATH and retry)\n' >&2
+		exit 1
+	fi
+done
+
+set +e
 tmp=$(mktemp -d)
+mktemp_rc=$?
+set -e
+if [ "$mktemp_rc" -ne 0 ] || [ -z "$tmp" ]; then
+	printf 'pre-commit: mktemp -d failed -- refusing to commit\n' >&2
+	exit 1
+fi
 trap 'rm -rf "$tmp"' EXIT
 
 report() {
-	# report <file> <line> <rule> <detail>
+	# report <file> <line> <rule> <detail> -- a positive finding.
 	printf 'BLOCKED %s:%s [%s] %s\n' "$1" "$2" "$3" "$4" >&2
 	: >"$tmp/failed"
 }
 
-git diff --cached --name-only --diff-filter=d -- testdata/ >"$tmp/staged" 2>/dev/null || : >"$tmp/staged"
+infra_fail() {
+	# infra_fail <detail> -- a tool we needed, in order to certify a file
+	# clean, did not behave as expected. Treated exactly like a positive
+	# finding: refuse, never assume clean.
+	printf 'BLOCKED [INFRA] %s\n' "$1" >&2
+	: >"$tmp/failed"
+}
+
+refusal_message() {
+	{
+		echo ""
+		echo "pre-commit: refusing to commit -- see BLOCKED line(s) above."
+		echo "If any are [INFRA]: a tool this hook needs did not behave as expected"
+		echo "(missing, or failed while scanning), so this hook could not certify the"
+		echo "staged testdata/ file(s) as clean, and refuses rather than guessing."
+		echo "Otherwise: do not hand-edit the fixture to patch this -- it is not a fix,"
+		echo "because the next capture silently overwrites hand edits anyway. Instead,"
+		echo "re-run:"
+		echo ""
+		echo "    ./scripts/capture-fixture.sh testdata/<file>.json"
+		echo ""
+		echo "and re-stage the regenerated, sanitized file."
+		echo ""
+		echo "(Emergency bypass: git commit --no-verify -- but the fixtures-are-sanitized CI"
+		echo "job still runs and will still fail; it's a backstop, not a way around this.)"
+	} >&2
+}
+
+require_ok() {
+	# require_ok <rc> <space-separated allowed rcs> <description>
+	# Calls infra_fail unless $1 is one of the allowed values in $2.
+	for _allowed in $2; do
+		if [ "$1" = "$_allowed" ]; then
+			return 0
+		fi
+	done
+	infra_fail "$3 (exit $1)"
+}
+
+# --- Discover staged testdata/ files ---------------------------------------
+# If git itself fails here, we have no reliable file list at all -- refuse
+# immediately rather than falling through to "nothing staged, exit 0".
+set +e
+git diff --cached --name-only --diff-filter=d -- testdata/ >"$tmp/staged" 2>"$tmp/staged.err"
+staged_rc=$?
+set -e
+if [ "$staged_rc" -ne 0 ]; then
+	infra_fail "git diff --cached failed (exit $staged_rc); cannot confirm nothing unsanitized is staged under testdata/"
+	refusal_message
+	exit 1
+fi
+
 if [ ! -s "$tmp/staged" ]; then
 	exit 0
 fi
 
+set +e
 me=$(id -un)
+id_rc=$?
+set -e
+if [ "$id_rc" -ne 0 ] || [ -z "$me" ]; then
+	infra_fail "id -un failed or returned nothing; cannot check for the committing user's account name"
+	me=""
+fi
 
 while IFS= read -r f; do
 	[ -n "$f" ] || continue
 
 	blob="$tmp/blob"
-	git show ":$f" >"$blob" 2>/dev/null || continue
+	set +e
+	git show ":$f" >"$blob" 2>"$tmp/blob.err"
+	show_rc=$?
+	set -e
+	if [ "$show_rc" -ne 0 ]; then
+		infra_fail "git show :$f failed (exit $show_rc); cannot verify this staged file is sanitized"
+		continue
+	fi
+
+	# --- Binary / NUL-byte guard -------------------------------------
+	# testdata/ is JSON by definition. Compare total byte count against
+	# the byte count with NUL bytes stripped; any difference means a NUL
+	# byte is present. This deliberately does not use grep at all here
+	# (grep is exactly the tool that silently gave up on binary input in
+	# the bug this fixes), and does not use tr's output to "clean" the
+	# file for scanning -- a NUL byte is refused outright, never
+	# silently stripped and scanned anyway, because that would hide the
+	# anomaly instead of surfacing it.
+	set +e
+	total=$(wc -c <"$blob")
+	wc_rc=$?
+	stripped=$(LC_ALL=C tr -d '\000' <"$blob" | wc -c)
+	tr_rc=$?
+	set -e
+	require_ok "$wc_rc" "0" "wc failed sizing $f"
+	require_ok "$tr_rc" "0" "tr|wc failed sizing $f after stripping NULs"
+	if [ "$wc_rc" -ne 0 ] || [ "$tr_rc" -ne 0 ]; then
+		continue
+	fi
+	if [ "$total" -ne "$stripped" ]; then
+		report "$f" "-" "BINARY_CONTENT" "staged content contains a NUL byte; fixtures under testdata/ must be UTF-8 JSON produced by scripts/capture-fixture.sh -- a binary file here cannot be sanitized or scanned, so it is refused rather than skipped"
+		continue
+	fi
 
 	# --- Rule 1: no /Users/<name> other than /Users/user ---
-	grep -nE '/Users/[^"/]+' "$blob" >"$tmp/cand1" 2>/dev/null || : >"$tmp/cand1"
+	set +e
+	grep -nE '/Users/[^"/]+' "$blob" >"$tmp/cand1" 2>"$tmp/cand1.err"
+	rc=$?
+	set -e
+	require_ok "$rc" "0 1" "grep (rule 1, /Users/ paths) failed scanning $f"
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
-		printf '%s\n' "$rest" | grep -oE '/Users/[^"/]+' >"$tmp/tok1" 2>/dev/null || : >"$tmp/tok1"
+		set +e
+		printf '%s\n' "$rest" | grep -oE '/Users/[^"/]+' >"$tmp/tok1" 2>"$tmp/tok1.err"
+		rc=$?
+		set -e
+		require_ok "$rc" "0 1" "grep (rule 1 token extraction) failed scanning $f line $lineno"
 		while IFS= read -r tok; do
 			[ -n "$tok" ] || continue
 			if [ "$tok" != "/Users/user" ]; then
@@ -59,10 +196,18 @@ while IFS= read -r f; do
 	done <"$tmp/cand1"
 
 	# --- Rule 2: no tilde path other than ~/projects/app ---
-	grep -nE '~/[A-Za-z0-9_./-]+' "$blob" >"$tmp/cand2" 2>/dev/null || : >"$tmp/cand2"
+	set +e
+	grep -nE '~/[A-Za-z0-9_./-]+' "$blob" >"$tmp/cand2" 2>"$tmp/cand2.err"
+	rc=$?
+	set -e
+	require_ok "$rc" "0 1" "grep (rule 2, tilde paths) failed scanning $f"
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
-		printf '%s\n' "$rest" | grep -oE '~/[A-Za-z0-9_./-]+' >"$tmp/tok2" 2>/dev/null || : >"$tmp/tok2"
+		set +e
+		printf '%s\n' "$rest" | grep -oE '~/[A-Za-z0-9_./-]+' >"$tmp/tok2" 2>"$tmp/tok2.err"
+		rc=$?
+		set -e
+		require_ok "$rc" "0 1" "grep (rule 2 token extraction) failed scanning $f line $lineno"
 		while IFS= read -r tok; do
 			[ -n "$tok" ] || continue
 			if [ "$tok" != "~/projects/app" ]; then
@@ -77,10 +222,18 @@ while IFS= read -r f; do
 	# then a plain `case` to test membership -- no alternation regex, so
 	# this cannot hit the empty-alternative parser issue GNU/BSD/ugrep
 	# disagree on.
-	grep -nF '"terminal_title' "$blob" >"$tmp/cand3" 2>/dev/null || : >"$tmp/cand3"
+	set +e
+	grep -nF '"terminal_title' "$blob" >"$tmp/cand3" 2>"$tmp/cand3.err"
+	rc=$?
+	set -e
+	require_ok "$rc" "0 1" "grep (rule 3, terminal_title) failed scanning $f"
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
+		set +e
 		val=$(printf '%s\n' "$rest" | sed -n 's/.*"terminal_title[a-zA-Z_]*" *: *"\([^"]*\)".*/\1/p')
+		sed_rc=$?
+		set -e
+		require_ok "$sed_rc" "0" "sed (rule 3 value extraction) failed on $f line $lineno"
 		case "$val" in
 		shell | agent | nvim | "") ;;
 		*)
@@ -96,7 +249,11 @@ while IFS= read -r f; do
 	case "$me" in
 	user | runner | "") ;; # these ARE the sanctioned placeholders; nothing to guard against
 	*)
-		grep -nF "$me" "$blob" >"$tmp/cand4" 2>/dev/null || : >"$tmp/cand4"
+		set +e
+		grep -nF "$me" "$blob" >"$tmp/cand4" 2>"$tmp/cand4.err"
+		rc=$?
+		set -e
+		require_ok "$rc" "0 1" "grep (rule 4, account name) failed scanning $f"
 		while IFS=: read -r lineno rest; do
 			[ -n "$lineno" ] || continue
 			report "$f" "$lineno" "REAL_USERNAME" "line contains committing user's account name ($me)"
@@ -106,19 +263,7 @@ while IFS= read -r f; do
 done <"$tmp/staged"
 
 if [ -f "$tmp/failed" ]; then
-	{
-		echo ""
-		echo "pre-commit: refusing to commit -- testdata/ fixture(s) above look unsanitized."
-		echo "Do not hand-edit the fixture to patch this: it is not a fix, because the next"
-		echo "capture silently overwrites hand edits anyway. Instead, re-run:"
-		echo ""
-		echo "    ./scripts/capture-fixture.sh testdata/<file>.json"
-		echo ""
-		echo "and re-stage the regenerated, sanitized file."
-		echo ""
-		echo "(Emergency bypass: git commit --no-verify -- but the fixtures-are-sanitized CI"
-		echo "job still runs and will still fail; it's a backstop, not a way around this.)"
-	} >&2
+	refusal_message
 	exit 1
 fi
 
