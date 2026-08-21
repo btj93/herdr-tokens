@@ -26,14 +26,33 @@
 # false confidence. So, throughout this script:
 #   - every external command it needs is checked present on PATH up front;
 #     a missing one refuses the commit, it does not skip the check.
-#   - every grep whose result is a security decision has its exit status
-#     captured explicitly; only 0 (matched) and 1 (genuinely no match) are
-#     treated as meaningful, anything else refuses the commit.
+#   - every grep/sed/wc/tr/git/id whose result is a security decision has
+#     its exit status captured explicitly via `set +e; <cmd>; rc=$?; set
+#     -e` (never bare `|| :`) and passed to `require_ok`, which itself
+#     returns non-zero on anything unexpected -- and every call site acts
+#     on that return value (`require_ok ... || continue`), not just on the
+#     side-effecting infra_fail it triggers. That return value is checked
+#     everywhere uniformly, including the outer, candidate-producing grep
+#     for each rule, so a scan that could not be trusted never lets later
+#     code in the same file act as though it ran cleanly.
 #   - every staged testdata/ file is explicitly checked for NUL bytes
 #     before any text tool ever touches it (testdata/ is JSON by
 #     definition; a NUL byte there is both unscannable and not something
 #     scripts/capture-fixture.sh would ever produce), and a NUL byte
 #     refuses the commit rather than being silently skipped or stripped.
+#   - no step is a multi-command PIPELINE whose overall exit status is
+#     checked as if it reflected every command in it. A shell pipeline's
+#     exit status is only that of its LAST command, so `a | b; rc=$?`
+#     observes only `b`'s failures, never `a`'s. This deliberately does NOT
+#     reach for `set -o pipefail` to fix that: pipefail is a bash/ksh/zsh
+#     extension, not POSIX, and this hook is `#!/bin/sh` -- on Debian/
+#     Ubuntu (where CI, and many contributors, run) `/bin/sh` is dash,
+#     which does not support it, so the hook would error out there while
+#     appearing to work on a macOS contributor's machine. Instead, every
+#     place that used to pipe one command into another (originally, the
+#     NUL-stripping `tr -d '\000' | wc -c`) is split into separate steps
+#     with an intermediate file, each with its own captured, checked exit
+#     status.
 #
 # POSIX sh only, and deliberately avoids GNU-only regex behaviour (e.g. a
 # trailing empty alternative in an ERE such as `(shell|agent|nvim|)$`) since
@@ -101,13 +120,18 @@ refusal_message() {
 
 require_ok() {
 	# require_ok <rc> <space-separated allowed rcs> <description>
-	# Calls infra_fail unless $1 is one of the allowed values in $2.
+	# Returns 0 if $1 is one of the allowed values in $2. Otherwise calls
+	# infra_fail and returns 1 -- every call site acts on this return
+	# value (typically `require_ok ... || continue`) rather than only
+	# relying on infra_fail's side effect, so a scan that could not be
+	# trusted can never let the caller act as though it succeeded.
 	for _allowed in $2; do
 		if [ "$1" = "$_allowed" ]; then
 			return 0
 		fi
 	done
 	infra_fail "$3 (exit $1)"
+	return 1
 }
 
 # --- Discover staged testdata/ files ---------------------------------------
@@ -158,17 +182,31 @@ while IFS= read -r f; do
 	# file for scanning -- a NUL byte is refused outright, never
 	# silently stripped and scanned anyway, because that would hide the
 	# anomaly instead of surfacing it.
+	#
+	# The stripping-and-counting step is intentionally two separate
+	# commands (tr to a file, then wc on that file) rather than
+	# `tr ... | wc -c`: a pipeline's exit status is only that of its
+	# last command, so piping would silently stop observing whether tr
+	# itself failed. See the file header for why this doesn't reach for
+	# `set -o pipefail` instead.
 	set +e
 	total=$(wc -c <"$blob")
 	wc_rc=$?
-	stripped=$(LC_ALL=C tr -d '\000' <"$blob" | wc -c)
+	set -e
+	require_ok "$wc_rc" "0" "wc failed sizing $f" || continue
+
+	set +e
+	LC_ALL=C tr -d '\000' <"$blob" >"$tmp/stripped"
 	tr_rc=$?
 	set -e
-	require_ok "$wc_rc" "0" "wc failed sizing $f"
-	require_ok "$tr_rc" "0" "tr|wc failed sizing $f after stripping NULs"
-	if [ "$wc_rc" -ne 0 ] || [ "$tr_rc" -ne 0 ]; then
-		continue
-	fi
+	require_ok "$tr_rc" "0" "tr failed stripping NUL bytes from $f" || continue
+
+	set +e
+	stripped=$(wc -c <"$tmp/stripped")
+	stripped_wc_rc=$?
+	set -e
+	require_ok "$stripped_wc_rc" "0" "wc failed sizing the NUL-stripped copy of $f" || continue
+
 	if [ "$total" -ne "$stripped" ]; then
 		report "$f" "-" "BINARY_CONTENT" "staged content contains a NUL byte; fixtures under testdata/ must be UTF-8 JSON produced by scripts/capture-fixture.sh -- a binary file here cannot be sanitized or scanned, so it is refused rather than skipped"
 		continue
@@ -179,14 +217,14 @@ while IFS= read -r f; do
 	grep -nE '/Users/[^"/]+' "$blob" >"$tmp/cand1" 2>"$tmp/cand1.err"
 	rc=$?
 	set -e
-	require_ok "$rc" "0 1" "grep (rule 1, /Users/ paths) failed scanning $f"
+	require_ok "$rc" "0 1" "grep (rule 1, /Users/ paths) failed scanning $f" || continue
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
 		set +e
 		printf '%s\n' "$rest" | grep -oE '/Users/[^"/]+' >"$tmp/tok1" 2>"$tmp/tok1.err"
 		rc=$?
 		set -e
-		require_ok "$rc" "0 1" "grep (rule 1 token extraction) failed scanning $f line $lineno"
+		require_ok "$rc" "0 1" "grep (rule 1 token extraction) failed scanning $f line $lineno" || continue
 		while IFS= read -r tok; do
 			[ -n "$tok" ] || continue
 			if [ "$tok" != "/Users/user" ]; then
@@ -200,14 +238,14 @@ while IFS= read -r f; do
 	grep -nE '~/[A-Za-z0-9_./-]+' "$blob" >"$tmp/cand2" 2>"$tmp/cand2.err"
 	rc=$?
 	set -e
-	require_ok "$rc" "0 1" "grep (rule 2, tilde paths) failed scanning $f"
+	require_ok "$rc" "0 1" "grep (rule 2, tilde paths) failed scanning $f" || continue
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
 		set +e
 		printf '%s\n' "$rest" | grep -oE '~/[A-Za-z0-9_./-]+' >"$tmp/tok2" 2>"$tmp/tok2.err"
 		rc=$?
 		set -e
-		require_ok "$rc" "0 1" "grep (rule 2 token extraction) failed scanning $f line $lineno"
+		require_ok "$rc" "0 1" "grep (rule 2 token extraction) failed scanning $f line $lineno" || continue
 		while IFS= read -r tok; do
 			[ -n "$tok" ] || continue
 			if [ "$tok" != "~/projects/app" ]; then
@@ -226,14 +264,14 @@ while IFS= read -r f; do
 	grep -nF '"terminal_title' "$blob" >"$tmp/cand3" 2>"$tmp/cand3.err"
 	rc=$?
 	set -e
-	require_ok "$rc" "0 1" "grep (rule 3, terminal_title) failed scanning $f"
+	require_ok "$rc" "0 1" "grep (rule 3, terminal_title) failed scanning $f" || continue
 	while IFS=: read -r lineno rest; do
 		[ -n "$lineno" ] || continue
 		set +e
 		val=$(printf '%s\n' "$rest" | sed -n 's/.*"terminal_title[a-zA-Z_]*" *: *"\([^"]*\)".*/\1/p')
 		sed_rc=$?
 		set -e
-		require_ok "$sed_rc" "0" "sed (rule 3 value extraction) failed on $f line $lineno"
+		require_ok "$sed_rc" "0" "sed (rule 3 value extraction) failed on $f line $lineno" || continue
 		case "$val" in
 		shell | agent | nvim | "") ;;
 		*)
@@ -253,7 +291,7 @@ while IFS= read -r f; do
 		grep -nF "$me" "$blob" >"$tmp/cand4" 2>"$tmp/cand4.err"
 		rc=$?
 		set -e
-		require_ok "$rc" "0 1" "grep (rule 4, account name) failed scanning $f"
+		require_ok "$rc" "0 1" "grep (rule 4, account name) failed scanning $f" || continue
 		while IFS=: read -r lineno rest; do
 			[ -n "$lineno" ] || continue
 			report "$f" "$lineno" "REAL_USERNAME" "line contains committing user's account name ($me)"
