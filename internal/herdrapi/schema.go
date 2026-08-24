@@ -44,6 +44,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 )
 
 // Violation is one schema failure: the JSON path at which it occurred (in
@@ -56,12 +57,52 @@ type Violation struct {
 
 func (v Violation) String() string { return v.Path + ": " + v.Reason }
 
+// tokenValueRules is the single source of truth for which workspace.tokens
+// keys a fixture is permitted to carry AND what shape each one's VALUE must
+// have. AllowedTokenKeys (below) is DERIVED from this map's keys rather than
+// listed separately, specifically so that adding a permitted key without
+// also giving it a value rule is impossible by construction, not merely
+// caught by a test someone remembered to write.
+//
+// This closes a real gap found by cross-review against the first version of
+// this file: the original tokensField() constrained keys against an
+// allowlist but checked every value with a bare "is this a string" type
+// check, so an arbitrary string -- including a real workspace's actual
+// project name -- validated cleanly through workspace.tokens.st_working
+// even though the IDENTICAL data is tightly pattern-checked when it arrives
+// via the `label` field. A closed key set with unconstrained values is not
+// closed; it just moves the hole from the key namespace into the value
+// space. Per derive.Desired/README's token reference, an st_* token's value
+// is EITHER the workspace label (config `value = "label"`, the default --
+// same data as `label`, so reuse reLabel rather than a second pattern that
+// could drift from it) OR the bare status word (config `value = "status"`)
+// -- both are legitimate, so tokenStatusOrLabelValue accepts either shape,
+// not reLabel alone; anything outside both (a real project name, for
+// instance) still fails either way. att_blocked/n_agents are always a
+// decimal count (see derive.go's strconv.Itoa).
+var tokenValueRules = map[string]fieldChecker{
+	"st_working":  tokenStatusOrLabelValue(),
+	"st_blocked":  tokenStatusOrLabelValue(),
+	"st_done":     tokenStatusOrLabelValue(),
+	"st_idle":     tokenStatusOrLabelValue(),
+	"st_unknown":  tokenStatusOrLabelValue(),
+	"st_none":     tokenStatusOrLabelValue(),
+	"att_blocked": pattern("tokens.att_blocked", reDecimalCount),
+	"n_agents":    pattern("tokens.n_agents", reDecimalCount),
+}
+
 // AllowedTokenKeys mirrors derive.AllTokens (see the import-cycle note
 // above). Every key of a fixture's workspace.tokens object must be one of
-// these.
-var AllowedTokenKeys = []string{
-	"st_working", "st_blocked", "st_done", "st_idle", "st_unknown", "st_none",
-	"att_blocked", "n_agents",
+// these -- derived from tokenValueRules, see its comment.
+var AllowedTokenKeys = sortedKeys(tokenValueRules)
+
+func sortedKeys(m map[string]fieldChecker) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // KnownAgentKinds is the set of agent-kind strings the "agent" field (and
@@ -98,7 +139,44 @@ var (
 	rePath        = regexp.MustCompile(`^/Users/user/projects/proj\d+$`)
 	reTerminalID  = regexp.MustCompile(`^term_\d{12}$`)
 	reSessionUUID = regexp.MustCompile(`^00000000-0000-4000-8000-\d{12}$`)
+
+	// reDecimalCount is what att_blocked/n_agents (derive.go's
+	// strconv.Itoa output) must look like: a non-negative decimal string,
+	// never anything else.
+	reDecimalCount = regexp.MustCompile(`^\d+$`)
 )
+
+// statusWords are the six values an st_* token's value carries when config
+// `value = "status"` -- one per token suffix (st_working -> "working", ...,
+// st_none -> "none", matching derive.go's Desired: nil AgentStatus renders
+// as the literal word "none").
+var statusWords = map[string]bool{
+	"working": true, "blocked": true, "done": true,
+	"idle": true, "unknown": true, "none": true,
+}
+
+// tokenStatusOrLabelValue validates an st_* token's value: it must be EITHER
+// a workspace label (reLabel -- the default `value = "label"` config) OR one
+// of the six status words (the `value = "status"` config). See
+// tokenValueRules' comment for why both shapes are legitimate and why a
+// reLabel-only check would be both incomplete (as a security check it would
+// still be correct, since it's stricter, not looser) and wrong (as a
+// correctness check, since it would reject a legitimately configured
+// "status" mode capture as a schema violation).
+func tokenStatusOrLabelValue() fieldChecker {
+	return func(path string, v any, out *[]Violation) {
+		s, ok := v.(string)
+		if !ok {
+			addf(out, path, "expected a string, got %T", v)
+			return
+		}
+		if reLabel.MatchString(s) || statusWords[s] {
+			return
+		}
+		addf(out, path, "token value %q is neither a workspace label matching %s nor one of the status words "+
+			"working/blocked/done/idle/unknown/none", s, reLabel.String())
+	}
+}
 
 var agentStatusValues = []string{"idle", "working", "blocked", "done", "unknown"}
 var titleValues = []string{"shell", "agent", "nvim", ""}
@@ -255,13 +333,11 @@ func arrayOfObjects(schema objectSchema) fieldChecker {
 }
 
 // tokensField validates the nullable Workspace.Tokens wire value: null, or an
-// object every one of whose keys is in AllowedTokenKeys and every one of
-// whose values is a string (Workspace.Tokens is map[string]string).
+// object every one of whose keys is in AllowedTokenKeys AND every one of
+// whose values matches that specific key's rule in tokenValueRules (not
+// merely "is a string" -- see tokenValueRules' comment for the gap that
+// left open before this).
 func tokensField() fieldChecker {
-	allowed := make(map[string]bool, len(AllowedTokenKeys))
-	for _, k := range AllowedTokenKeys {
-		allowed[k] = true
-	}
 	return func(path string, v any, out *[]Violation) {
 		if v == nil {
 			return
@@ -272,13 +348,12 @@ func tokensField() fieldChecker {
 			return
 		}
 		for k, val := range m {
-			if !allowed[k] {
+			rule, known := tokenValueRules[k]
+			if !known {
 				addf(out, path+"."+k, "token key %q is not one of derive.AllTokens", k)
 				continue
 			}
-			if _, ok := val.(string); !ok {
-				addf(out, path+"."+k, "token value must be a string, got %T", val)
-			}
+			rule(path+"."+k, val, out)
 		}
 	}
 }

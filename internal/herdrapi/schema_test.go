@@ -28,10 +28,18 @@ package herdrapi_test
 // schema must reject): every one is fabricated. None is a value that has
 // ever appeared in a real Herdr session on any machine. Values that merely
 // need to *look* live-shaped for the test to be meaningful (a hex-suffixed
-// term_ id, a UUID) are deliberately invented nonsense (term_deadbeef0000,
-// 11111111-2222-3333-4444-555555555555) precisely so a fabricated,
-// obviously-synthetic string is never confused with something worth
-// scrubbing from history a second time.
+// term_ id, a UUID, a plausible project name) are deliberately invented
+// nonsense (term_deadbeef0000, 11111111-2222-3333-4444-555555555555,
+// "orders-api") precisely so a fabricated, obviously-synthetic string is
+// never confused with something worth scrubbing from history a second time.
+//
+// Each such test also carries its own one-line note: if the schema later
+// changes such that the value used no longer fails (i.e. it starts
+// CONFORMING), the fix is to pick a new non-conforming value for that test,
+// never to relax the schema to keep the old value passing. A negative test
+// that silently stops testing rejection because its input quietly started
+// validating is a worse failure mode than the test simply not existing,
+// because it still reports green.
 
 import (
 	"encoding/json"
@@ -130,6 +138,9 @@ func TestAllowedTokenKeysMirrorDerive(t *testing.T) {
 // field present in the fixture but never named in the schema for its
 // enclosing object fails, and names the field, rather than being silently
 // ignored the way every prior denylist-based guard would have treated it.
+// If client_account_slug is ever added to the schema as a recognised field,
+// this test's premise (an UNKNOWN field) is gone -- swap in a different,
+// still-unrecognised field name rather than reworking the assertion.
 func TestValidateFixtureRejectsUnknownField(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -159,6 +170,11 @@ func TestValidateFixtureRejectsUnknownField(t *testing.T) {
 // terminal_id -- the shape a real, live Herdr terminal_id actually has --
 // fails ^term_\d{12}$. The value is fabricated (never a real terminal id on
 // any machine); it only needs to be shaped like one.
+//
+// If term_deadbeef0000 ever starts matching ^term_\d{12}$ (it can't -- "dead"
+// and "beef" are not digits -- but if the pattern is ever loosened), replace
+// this value with a different non-conforming one; do not loosen the pattern
+// to keep this specific string passing.
 func TestValidateFixtureRejectsLiveLookingTerminalID(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -187,6 +203,11 @@ func TestValidateFixtureRejectsLiveLookingTerminalID(t *testing.T) {
 // tool's false-positive leak report. Under ^term_\d{12}$ it fails -- neither
 // tool's convention gets a free pass merely for being "the placeholder";
 // only the shape the schema actually declares does.
+//
+// If term_00000000abcd ever starts conforming, replace the value used here
+// with a different non-conforming one -- do not relax the pattern to keep
+// this exact historical value passing; that would silently resurrect the
+// original bug this test exists to pin down.
 func TestValidateFixtureRejectsOldPlaceholderTerminalID(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -213,6 +234,9 @@ func TestValidateFixtureRejectsOldPlaceholderTerminalID(t *testing.T) {
 // never-real) home path other than the placeholder fails. "mallory" is the
 // classic synthetic third-party name and refers to no one associated with
 // this repository or machine.
+//
+// If this path ever starts matching rePath, swap in a different
+// non-conforming path; do not widen rePath to keep this one passing.
 func TestValidateFixtureRejectsRealLookingPath(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -238,6 +262,13 @@ func TestValidateFixtureRejectsRealLookingPath(t *testing.T) {
 // TestValidateFixtureRejectsNonGenericTerminalTitle proves a task
 // description or client project name in terminal_title -- the exact leak
 // class that was invisible to the username and path guards -- fails.
+// "orders-api" is a fabricated, generic-sounding project name used
+// elsewhere in this repo's own comments as a fictional example; it refers
+// to no real project.
+//
+// If "orders-api: nvim" ever starts matching the terminal_title allowlist,
+// replace it with a different non-conforming string; do not add it to the
+// allowlist to keep this test passing.
 func TestValidateFixtureRejectsNonGenericTerminalTitle(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -274,6 +305,10 @@ func TestValidateFixtureRejectsNonGenericTerminalTitle(t *testing.T) {
 // TestValidateFixtureRejectsNonUUIDSessionValue rounds out the identifier
 // coverage: a fabricated, schema-noncompliant UUID-shaped placeholder in
 // agent_session.value must fail ^00000000-0000-4000-8000-\d{12}$.
+//
+// If 11111111-2222-3333-4444-555555555555 ever starts matching
+// reSessionUUID, replace it with a different non-conforming UUID; do not
+// widen reSessionUUID to keep this one passing.
 func TestValidateFixtureRejectsNonUUIDSessionValue(t *testing.T) {
 	doc := decodeFixture(t, "../../testdata/snapshot.json")
 	snapshot := doc["snapshot"].(map[string]any)
@@ -299,6 +334,20 @@ func TestValidateFixtureRejectsNonUUIDSessionValue(t *testing.T) {
 
 // --- tokens field, exercised directly since neither real fixture happens to
 // carry a workspace.tokens value ---------------------------------------------
+//
+// The tests below cover a real gap found by cross-review against the first
+// version of this schema (commit 8081d2a): tokensField constrained token
+// KEYS against AllowedTokenKeys but checked every VALUE with a bare "is this
+// a string" type check, so an arbitrary string -- including a real
+// workspace's actual project name -- validated cleanly through
+// workspace.tokens.st_working, even though the IDENTICAL data (the
+// workspace label) is tightly pattern-checked wherever it arrives via the
+// `label` field. tokenValueRules in schema.go now gives every permitted key
+// its own value rule; TestAllowedTokenKeysMirrorDerive above no longer needs
+// a companion "every key has a rule" test because AllowedTokenKeys is
+// derived FROM tokenValueRules -- a key with no rule cannot exist in
+// AllowedTokenKeys at all, so the gap is closed structurally, not just
+// tested for.
 
 func TestTokensFieldAcceptsNullAndKnownKeys(t *testing.T) {
 	body := `{
@@ -317,6 +366,56 @@ func TestTokensFieldAcceptsNullAndKnownKeys(t *testing.T) {
 	}
 	if len(violations) != 0 {
 		t.Fatalf("expected no violations, got: %v", violationPaths(violations))
+	}
+}
+
+// TestTokensFieldAcceptsLegitimatePopulatedObject is the coordinator's exact
+// worked example of what a real, correctly-behaving daemon writes: an st_*
+// token carrying the workspace label, and a decimal count in n_agents. This
+// must PASS, proving the tightened value rules don't reject legitimate data.
+func TestTokensFieldAcceptsLegitimatePopulatedObject(t *testing.T) {
+	body := `{
+		"type": "session_snapshot",
+		"snapshot": {
+			"workspaces": [
+				{"workspace_id": "w1", "label": "space-a", "agent_status": "working",
+				 "tokens": {"st_working": "space-a", "n_agents": "3"}}
+			],
+			"agents": []
+		}
+	}`
+	violations, err := herdrapi.ValidateFixture([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateFixture: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations for a legitimate populated tokens object, got: %v", violationPaths(violations))
+	}
+}
+
+// TestTokensFieldAcceptsStatusWordValue proves the OTHER legitimate shape an
+// st_* token's value can have: per config `value = "status"` (see
+// derive.Desired and the README token reference), the token carries the bare
+// status word instead of the workspace label. A schema that only accepted
+// reLabel here would incorrectly reject a real, correctly-configured
+// capture -- this locks in that the broader rule is deliberate, not an
+// oversight.
+func TestTokensFieldAcceptsStatusWordValue(t *testing.T) {
+	body := `{
+		"type": "session_snapshot",
+		"snapshot": {
+			"workspaces": [
+				{"workspace_id": "w1", "label": "space-a", "agent_status": "idle", "tokens": {"st_idle": "idle"}}
+			],
+			"agents": []
+		}
+	}`
+	violations, err := herdrapi.ValidateFixture([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateFixture: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations for a status-word token value, got: %v", violationPaths(violations))
 	}
 }
 
@@ -342,6 +441,73 @@ func TestTokensFieldRejectsUnknownKey(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a violation naming totally_made_up_token, got: %v", violationPaths(violations))
+	}
+}
+
+// TestTokensFieldRejectsRealLookingProjectNameInStatusToken is THE gap this
+// follow-up closes: a real-looking project name as an st_working value used
+// to validate cleanly because the old tokensField only type-checked values.
+// "orders-api" is fabricated -- the same fictional project name already
+// used elsewhere in this file's terminal_title test -- and refers to no real
+// project; the value that actually triggered this fix was a real client
+// project name and is never repeated anywhere in this codebase.
+//
+// If "orders-api" ever starts matching reLabel (it can't -- reLabel requires
+// a "space-"/"tab-" prefix -- but if the pattern is ever changed), replace
+// this value with a different non-conforming one; do not loosen the token
+// value rule to keep it passing.
+func TestTokensFieldRejectsRealLookingProjectNameInStatusToken(t *testing.T) {
+	body := `{
+		"type": "session_snapshot",
+		"snapshot": {
+			"workspaces": [
+				{"workspace_id": "w1", "label": "space-a", "agent_status": "working", "tokens": {"st_working": "orders-api"}}
+			],
+			"agents": []
+		}
+	}`
+	violations, err := herdrapi.ValidateFixture([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateFixture: %v", err)
+	}
+	found := false
+	for _, v := range violations {
+		if strings.HasSuffix(v.Path, ".tokens.st_working") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a violation naming tokens.st_working for a real-looking project name, got: %v", violationPaths(violations))
+	}
+}
+
+// TestTokensFieldRejectsNonNumericAttBlocked proves att_blocked (a decimal
+// count per derive.go's strconv.Itoa) rejects a non-numeric value.
+//
+// If "many" ever starts matching ^\d+$, replace it with a different
+// non-numeric string; do not loosen reDecimalCount to keep it passing.
+func TestTokensFieldRejectsNonNumericAttBlocked(t *testing.T) {
+	body := `{
+		"type": "session_snapshot",
+		"snapshot": {
+			"workspaces": [
+				{"workspace_id": "w1", "label": "space-a", "agent_status": "blocked", "tokens": {"att_blocked": "many"}}
+			],
+			"agents": []
+		}
+	}`
+	violations, err := herdrapi.ValidateFixture([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateFixture: %v", err)
+	}
+	found := false
+	for _, v := range violations {
+		if strings.HasSuffix(v.Path, ".tokens.att_blocked") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a violation naming tokens.att_blocked for a non-numeric value, got: %v", violationPaths(violations))
 	}
 }
 
