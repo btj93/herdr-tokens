@@ -78,15 +78,116 @@ func (l *callLog) countBetween(method string, from, to time.Time) int {
 	return n
 }
 
+// tokenStore is the fake server's memory of what workspace.report_metadata
+// calls have actually applied, keyed by workspace ID -- i.e. what a REAL
+// Herdr would echo back on the next session.snapshot. This is required for
+// fidelity now that Controller.Reconcile compares desired tokens against
+// the server's OWN reported state rather than this daemon's memory of what
+// it wrote: a fake that never echoed writes back would make every tick
+// look permanently "changed", which is not how the real protocol behaves,
+// and would silently defeat any test asserting a steady state is skipped.
+type tokenStore struct {
+	mu   sync.Mutex
+	data map[string]map[string]string
+}
+
+// apply updates the stored tokens for workspaceID from one
+// workspace.report_metadata call's decoded "tokens" param: a string value
+// sets the key, a JSON null (decoded as a nil `any`) clears it -- mirroring
+// herdrapi.Client.ReportWorkspaceMetadata, which sends a nil *string as
+// JSON null specifically to clear a key.
+func (s *tokenStore) apply(workspaceID string, tokens map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data == nil {
+		s.data = map[string]map[string]string{}
+	}
+	cur := s.data[workspaceID]
+	if cur == nil {
+		cur = map[string]string{}
+	}
+	for k, v := range tokens {
+		if v == nil {
+			delete(cur, k)
+			continue
+		}
+		if sv, ok := v.(string); ok {
+			cur[k] = sv
+		}
+	}
+	s.data[workspaceID] = cur
+}
+
+// snapshot returns what a session.snapshot response should currently report
+// for workspaceID: nil (which marshals to JSON null) if nothing is set,
+// matching herdrapi.Workspace.Tokens' nullable wire contract.
+func (s *tokenStore) snapshot(workspaceID string) map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.data[workspaceID]
+	if len(cur) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cur))
+	for k, v := range cur {
+		out[k] = v
+	}
+	return out
+}
+
+// injectObservedTokens decodes a scripted session.snapshot reply and, for
+// every workspace that does NOT already specify a "tokens" key, fills in
+// what the store currently holds for it. A test's reply function therefore
+// only needs to set "tokens" explicitly when it wants to simulate something
+// the store would not produce on its own -- e.g. a Herdr restart wiping
+// metadata with no snapshot failure, which is exactly the scenario
+// TestRunWritesWhenObservedTokensVanishWithNoSnapshotFailure below drives.
+// A reply with zero workspaces (the misread-envelope case) passes through
+// with no workspaces to inject into, unchanged in effect.
+func injectObservedTokens(raw string, store *tokenStore) string {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return raw // not this function's job to validate a deliberately malformed reply
+	}
+	result, _ := doc["result"].(map[string]any)
+	snap, _ := result["snapshot"].(map[string]any)
+	workspaces, _ := snap["workspaces"].([]any)
+	for _, w := range workspaces {
+		wsMap, ok := w.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, present := wsMap["tokens"]; present {
+			continue
+		}
+		wsID, _ := wsMap["workspace_id"].(string)
+		if got := store.snapshot(wsID); got != nil {
+			wsMap["tokens"] = got
+		} else {
+			wsMap["tokens"] = nil
+		}
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
 // scriptedServer listens on a temp unix socket and speaks Herdr's real wire
 // protocol. Each session.snapshot call is dispatched to reply with the
 // 1-based call count for that method; reply must return the raw response
 // body (no trailing newline -- the server appends the sole frame
-// terminator). workspace.report_metadata calls always succeed and are only
-// recorded, never scripted, since no test here needs to fail a write.
+// terminator). Before the response is sent, injectObservedTokens fills in
+// any workspace's "tokens" key the reply itself left unset, from the
+// server's own tokenStore -- see that function's doc comment. workspace.
+// report_metadata calls always succeed; they are recorded in the call log
+// as before, and now also applied to the tokenStore so later session.
+// snapshot replies reflect them.
 func scriptedServer(t *testing.T, reply func(n int) string) (string, *callLog) {
 	t.Helper()
 	log := &callLog{}
+	store := &tokenStore{}
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "h.sock")
 	ln, err := net.Listen("unix", sock)
@@ -112,8 +213,12 @@ func scriptedServer(t *testing.T, reply func(n int) string) (string, *callLog) {
 				n := log.record(method)
 				switch method {
 				case "session.snapshot":
-					c.Write([]byte(reply(n) + "\n"))
+					c.Write([]byte(injectObservedTokens(reply(n), store) + "\n"))
 				case "workspace.report_metadata":
+					params, _ := req["params"].(map[string]any)
+					wsID, _ := params["workspace_id"].(string)
+					tokens, _ := params["tokens"].(map[string]any)
+					store.apply(wsID, tokens)
 					c.Write([]byte(`{"id":"1","result":{"type":"workspace_metadata_reported"}}` + "\n"))
 				default:
 					c.Write([]byte(`{"id":"1","error":{"code":"unknown_method","message":"nope"}}` + "\n"))
@@ -382,6 +487,73 @@ func TestRunShutdownDuringTickerWaitIsPrompt(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Run did not return within 500ms of context cancellation during the ticker wait")
+	}
+}
+
+// --- 6. OBSERVED-TOKENS SELF-HEAL (parked item) -----------------------------
+
+// TestRunWritesWhenObservedTokensVanishWithNoSnapshotFailure drives valid
+// (write), valid-with-tokens-matching-what-was-just-written (skip, unchanged
+// and fresh), valid-with-NO-tokens (write) across three ticks -- and EVERY
+// session.snapshot call in this script succeeds. There is no misread and no
+// transport error anywhere in it, so sawFailure never becomes true and
+// Invalidate is never called.
+//
+// This is the sub-3s Herdr-restart scenario the parked defect names: a
+// restart that completes inside one poll interval, and whose unavailable
+// window misses this daemon's in-flight dial, produces no observable
+// failure at all -- Invalidate's trigger never fires -- yet Herdr's own
+// in-memory metadata is gone. If tick 3 still writes here, it can only be
+// because Reconcile compared desired against ws.Tokens (the server's own
+// report, which vanished) rather than against this Controller's memory of
+// what it last wrote (which still thinks tick 2 is fresh and unchanged).
+func TestRunWritesWhenObservedTokensVanishWithNoSnapshotFailure(t *testing.T) {
+	sock, log := scriptedServer(t, func(n int) string {
+		if n >= 3 {
+			// Explicit override: the SERVER reports no tokens for this
+			// workspace at all, even though nothing has failed -- this is
+			// what injectObservedTokens leaves alone rather than filling
+			// in from the store, simulating a Herdr restart that
+			// completed inside one poll interval and never made an
+			// in-flight dial fail.
+			return `{"id":"1","result":{"type":"session_snapshot","snapshot":{"workspaces":[{"workspace_id":"w1","label":"space-a","agent_status":"idle","tokens":null}],"agents":[]}}}`
+		}
+		// n=1: nothing written yet, so the store fills in "tokens": null.
+		// n=2: the store now reflects tick 1's actual write
+		// (st_idle="space-a"), auto-filled in by injectObservedTokens --
+		// this is "unchanged and fresh" as OBSERVED, not merely
+		// remembered.
+		return validSnapshotReply("w1", "space-a", "idle")
+	})
+	cfg := config.Config{
+		SchemaVersion: config.SchemaVersion,
+		PollInterval:  30 * time.Millisecond,
+		TTL:           10 * time.Second, // heartbeat age (TTL/3) far exceeds the test's runtime
+		Value:         "label",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	Run(ctx, cfg, sock)
+
+	snapTimes := log.times("session.snapshot")
+	if len(snapTimes) < 4 {
+		t.Fatalf("only %d snapshot calls, want at least 4 (write, skip, write, +1 to bound tick 3's window)", len(snapTimes))
+	}
+
+	tickOneWrites := log.countBetween("workspace.report_metadata", snapTimes[0], snapTimes[1])
+	if tickOneWrites != 1 {
+		t.Fatalf("tick 1 (first ever) wrote %d times, want 1", tickOneWrites)
+	}
+
+	tickTwoWrites := log.countBetween("workspace.report_metadata", snapTimes[1], snapTimes[2])
+	if tickTwoWrites != 0 {
+		t.Fatalf("tick 2 (server-observed tokens already match desired, fresh) wrote %d times, want 0", tickTwoWrites)
+	}
+
+	tickThreeWrites := log.countBetween("workspace.report_metadata", snapTimes[2], snapTimes[3])
+	if tickThreeWrites != 1 {
+		t.Fatalf("tick 3 (server-observed tokens vanished, NO snapshot failure, Invalidate never engaged) "+
+			"wrote %d times, want 1: this is the sub-3s Herdr-restart case that must self-heal on ws.Tokens alone", tickThreeWrites)
 	}
 }
 

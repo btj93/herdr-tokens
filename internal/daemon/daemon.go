@@ -73,11 +73,17 @@ func run(ctx context.Context, cfg config.Config, socket string, baseBackoff, max
 
 	backoff := baseBackoff
 
-	// sawFailure tracks whether the most recent snapshot attempt(s) failed.
-	// A Herdr restart always makes the socket disappear out from under us,
-	// so it always produces at least one snapshot failure -- that is the
-	// reliable signal that the process on the other end may have forgotten
-	// everything it knew, even though our own write-skip cache has not.
+	// sawFailure tracks whether the most recent snapshot attempt(s) failed,
+	// purely to drive ctrl.Invalidate() below -- which is now a
+	// belt-and-suspenders extra, not the mechanism the "recovers within one
+	// tick" guarantee actually rests on. That guarantee now comes from
+	// Reconcile itself comparing desired tokens against what THIS snapshot
+	// reports the server holding (herdrapi.Workspace.Tokens), every tick,
+	// regardless of sawFailure -- see controller.Reconcile's doc comment.
+	// sawFailure is retained because a Herdr restart reliably produces at
+	// least one snapshot failure (the socket disappears), so it is a cheap,
+	// harmless trigger for a mechanism kept for other reasons; see
+	// Controller.Invalidate's doc comment for why it stays.
 	sawFailure := false
 
 	for {
@@ -104,11 +110,18 @@ func run(ctx context.Context, cfg config.Config, socket string, baseBackoff, max
 
 		if sawFailure {
 			// The first successful snapshot after one or more failures: Herdr
-			// may have just restarted and lost its own in-memory workspace
-			// metadata. Our cache doesn't know that on its own, so drop it
-			// and let Reconcile write fresh, even for a token set that still
-			// looks unchanged -- otherwise the sidebar would stay nameless
-			// for up to HeartbeatAge() after Herdr is already back.
+			// may have just restarted. This is now redundant with Reconcile's
+			// own ws.Tokens comparison (a restart also makes the server
+			// report empty/changed tokens, which self-heals on its own), but
+			// harmless -- forcing an extra rewrite here costs one redundant
+			// RPC at worst. Kept as a second, independent path to the same
+			// outcome rather than removed; see Controller.Invalidate's doc
+			// comment. Notably, this branch canNOT catch the restart case
+			// the parked defect named -- a restart completing inside one
+			// poll interval with no in-flight dial failure never sets
+			// sawFailure at all -- which is exactly why the fix could not
+			// simply be "invalidate more eagerly" and had to move the
+			// comparison onto observed server state instead.
 			ctrl.Invalidate()
 			sawFailure = false
 		}

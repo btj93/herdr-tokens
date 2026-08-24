@@ -17,7 +17,6 @@ type Reporter interface {
 }
 
 type record struct {
-	tokens  map[string]*string
 	written time.Time
 }
 
@@ -35,24 +34,37 @@ func New(cfg config.Config, rep Reporter) *Controller {
 func (c *Controller) Tracked() int { return len(c.last) }
 
 // Invalidate drops the entire write-skip cache, forcing the next Reconcile
-// to write every workspace regardless of whether its token set looks
-// unchanged and fresh.
+// to write every workspace regardless of whether the server-observed token
+// set looks unchanged and fresh.
 //
-// This exists for the case a bare unchanged/fresh check cannot see: a Herdr
-// restart drops Herdr's own in-memory workspace metadata, but this
-// Controller's `last` map has no way to know that on its own, so without
-// Invalidate the daemon would skip rewriting an unchanged-looking token set
-// for up to HeartbeatAge() after Herdr comes back -- leaving the sidebar
-// nameless the whole time, contrary to the "recovers within one tick"
-// guarantee. Callers should invoke this on the first successful snapshot
-// following one or more consecutive snapshot failures, since a Herdr
-// restart always produces at least one such failure (the socket goes away).
+// It is now REDUNDANT for correctness: Reconcile compares desired tokens
+// against what Herdr itself reports for the workspace (herdrapi.Workspace.
+// Tokens), not against anything this Controller remembers writing, so a
+// Herdr restart, a TTL expiry, a manual clear, or another plugin clobbering
+// our keys are all just "the server doesn't hold what we expect" and
+// self-heal on the very next tick without needing to be told a restart may
+// have happened. Invalidate and its call site (daemon.Run, on the first
+// successful snapshot after one or more failures) are kept anyway: they are
+// harmless -- forcing an extra rewrite when the observed set already
+// matches desired costs one redundant RPC, nothing more -- and removing
+// them is a separate decision from closing this defect, not a consequence
+// of it.
 func (c *Controller) Invalidate() {
 	c.last = map[string]record{}
 }
 
 // Reconcile derives the desired tokens for every workspace and writes those
-// that changed or whose last write is older than ttl/3.
+// whose SERVER-REPORTED tokens (ws.Tokens) do not already match, or whose
+// last successful write is older than ttl/3.
+//
+// Comparing against ws.Tokens rather than a remembered copy of what this
+// Controller last wrote is the whole point: this daemon's own memory of
+// what it wrote can be wrong about the server's actual state (a Herdr
+// restart, a TTL expiry, a manual clear, or another plugin overwriting our
+// keys all leave the memory stale in the same way), and comparing against
+// the snapshot's own report of current state means every one of those
+// causes self-heals on the next tick with no inference about which one
+// happened.
 //
 // The staleness clause is what keeps the TTL alive. Without it the daemon
 // would either never refresh (tokens expire while healthy) or write every
@@ -68,7 +80,7 @@ func (c *Controller) Reconcile(ctx context.Context, snap herdrapi.Snapshot, now 
 		want := derive.Desired(ws, snap.Agents, c.cfg.Value)
 
 		if prev, ok := c.last[ws.WorkspaceID]; ok &&
-			equalTokens(prev.tokens, want) &&
+			observedMatchesDesired(ws.Tokens, want) &&
 			now.Sub(prev.written) < c.cfg.HeartbeatAge() {
 			continue
 		}
@@ -82,7 +94,7 @@ func (c *Controller) Reconcile(ctx context.Context, snap herdrapi.Snapshot, now 
 			}
 			continue
 		}
-		c.last[ws.WorkspaceID] = record{tokens: want, written: now}
+		c.last[ws.WorkspaceID] = record{written: now}
 		written++
 	}
 
@@ -94,20 +106,40 @@ func (c *Controller) Reconcile(ctx context.Context, snap herdrapi.Snapshot, now 
 	return written, firstErr
 }
 
-func equalTokens(a, b map[string]*string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		bv, ok := b[k]
-		if !ok {
-			return false
+// observedMatchesDesired reports whether the tokens Herdr currently reports
+// for a workspace (observed) already equal what this workspace should have
+// (want), so writing again would be redundant.
+//
+// The two shapes differ and must not be compared naively: want
+// (derive.Desired's output) is a COMPLETE map over every key in
+// derive.AllTokens, where a nil value means "clear this key"; observed
+// (herdrapi.Workspace.Tokens) reports ONLY keys that are actually set --
+// Herdr never reports a key with an explicit null/empty value, it simply
+// omits keys that aren't there (and reports a nil map, not an error, when
+// there is nothing at all -- see herdrapi.Workspace's doc comment). So for
+// every key in want:
+//   - want[key] == nil must correspond to key being ABSENT from observed
+//     (nothing to clear; if it's still there, a write is needed to clear it)
+//   - want[key] != nil must correspond to key being PRESENT in observed
+//     with an equal string value
+//
+// Ranging over want alone is sufficient and does not need a length check
+// the way the old remembered-state comparison did: want's key set is always
+// exactly derive.AllTokens (derive.Desired guarantees every key is present,
+// nil or not), so this only ever asks about keys this plugin owns. A key
+// present in observed that ISN'T in want (e.g. another plugin's own
+// metadata key) is simply never looked at -- this function has no opinion
+// about tokens it doesn't own.
+func observedMatchesDesired(observed map[string]string, want map[string]*string) bool {
+	for k, wantVal := range want {
+		observedVal, present := observed[k]
+		if wantVal == nil {
+			if present {
+				return false
+			}
+			continue
 		}
-		switch {
-		case av == nil && bv == nil:
-		case av == nil || bv == nil:
-			return false
-		case *av != *bv:
+		if !present || observedVal != *wantVal {
 			return false
 		}
 	}
