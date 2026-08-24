@@ -69,12 +69,15 @@ jobs:
             echo "::error::testdata leaks a terminal title"
             exit 1
           fi
-      # AUTHORITATIVE CHECK. internal/herdrapi/fixture_test.go decodes the
-      # WHOLE fixture and recursively asserts the exact shape of every
-      # string value at every depth (paths, tilde-paths, titles, and the
-      # UUID/term_ live-identifier check) -- not a token extracted from a
-      # single line. That recursive shape assertion, not the greps above,
-      # is what actually decides whether a fixture is safe to publish; the
+      # AUTHORITATIVE CHECK. internal/herdrapi/schema.go decodes the WHOLE
+      # fixture and validates it against a CLOSED positive schema: every
+      # field present must be one the schema names, and have the exact
+      # shape (literal, enum, or regex) that field is declared to have --
+      # not a token extracted from a single line, and not a denylist of
+      # known-bad shapes (see internal/herdrapi/schema.go's header and the
+      # CHANGELOG "Known limitation" section for why a denylist was replaced
+      # rather than extended). That closed schema, not the greps above, is
+      # what actually decides whether a fixture is safe to publish; the
       # greps are a coarse, cheap pre-filter and nothing more.
-      - name: Run authoritative fixture-shape assertions (Go tests)
-        run: go test ./internal/herdrapi/... -run '^TestFixture' -v
+      - name: Run authoritative fixture-schema assertions (Go tests)
+        run: go test ./internal/herdrapi/... -run '^Test(ValidateFixture|TokensField|AllowedTokenKeysMirrorDerive)' -v

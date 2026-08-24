@@ -307,13 +307,45 @@ earliest first:
    without this step has no hook installed). From then on, `git commit`
    inspects the *staged* contents of any `testdata/` file — not the working
    tree, so staging a bad fixture and then cleaning up the file on disk
-   afterwards still gets caught — and refuses the commit if it finds a
-   `/Users/` path other than `/Users/user`, a tilde path other than
-   `~/projects/app`, a `terminal_title`/`terminal_title_stripped` outside
-   `shell`/`agent`/`nvim`/empty, or your own machine account name
-   (`id -un`). This is what actually stops a leak: once bad data is
+   afterwards still gets caught — and refuses the commit if it fails
+   `internal/herdrapi/schema.go`'s **closed positive schema**: every field
+   present in the fixture must be one the schema names, with the exact shape
+   (a literal, an enum, or a regex — e.g. `terminal_id` must match
+   `^term_\d{12}$`, `cwd`/`foreground_cwd` must match
+   `^/Users/user/projects/proj\d+$`) that field is declared to have. A field
+   the schema has never seen at all is refused too, by design — see "Why a
+   schema, not a denylist" below. The hook also separately blocks your own
+   machine account name (`id -un`) appearing anywhere in the staged blob,
+   since a couple of schema fields are deliberately type-checked only (not
+   pattern-constrained) and a leaked account name could otherwise hide in
+   one of those. This is what actually stops a leak: once bad data is
    committed *locally*, a push is one command away, and exposure becomes a
    matter of when, not if.
+
+### Why a schema, not a denylist
+
+Earlier versions of this guard (still visible in git history) scanned staged
+fixtures for a fixed list of *known-bad shapes*: a `/Users/` path that wasn't
+the placeholder, a tilde path, a non-generic `terminal_title`, a UUID, a
+`term_`-prefixed identifier. That is a **denylist**, and it has one
+structural blind spot no amount of additional rules fixes: **a scan for
+known-bad shapes cannot distinguish a leak from its own fix.** This was
+demonstrated, not theorised — see the CHANGELOG's "Fixture privacy guard —
+replaced the shape-based denylist with a closed positive schema" entry for
+the full account of two independently written audit tools that each cleared
+their own repository and each flagged the *other's* placeholder convention
+as a leak.
+
+`internal/herdrapi/schema.go` inverts this: it asserts the decoded fixture
+conforms to an **allowlist** of permitted fields and value shapes, walked
+over the whole document. The schema is **closed** — a field present in a
+fixture but not named in the schema for its enclosing object fails, naming
+the field, rather than passing through unexamined. A future Herdr version
+that adds a field anywhere in this tree fails the build the first time a
+fixture containing it is captured, until a human classifies that field here.
+That failure is deliberate, and should be mildly annoying exactly when it
+matters. Run it directly with `go test ./internal/herdrapi/... -run
+'^Test(ValidateFixture|TokensField|AllowedTokenKeysMirrorDerive)' -v`.
 3. **CI is the backstop, not the guard.** The `fixtures-are-sanitized` job in
    `.github/workflows/ci.yml` runs the same checks again. By the time it
    runs, a real leak is already pushed — public, indexed, possibly cloned —

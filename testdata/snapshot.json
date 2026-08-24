@@ -7,7 +7,7 @@
           "agent": "codex",
           "kind": "id",
           "source": "herdr:codex",
-          "value": "session-1"
+          "value": "00000000-0000-4000-8000-000000000001"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj1",
@@ -17,7 +17,7 @@
         "revision": 0,
         "state_change_seq": 8,
         "tab_id": "w5:t5",
-        "terminal_id": "term-1",
+        "terminal_id": "term_000000000001",
         "workspace_id": "w5"
       },
       {
@@ -26,7 +26,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-2"
+          "value": "00000000-0000-4000-8000-000000000002"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj1",
@@ -36,7 +36,7 @@
         "revision": 0,
         "state_change_seq": 9,
         "tab_id": "w5:t5",
-        "terminal_id": "term-2",
+        "terminal_id": "term_000000000002",
         "workspace_id": "w5"
       },
       {
@@ -45,7 +45,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-3"
+          "value": "00000000-0000-4000-8000-000000000003"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -55,7 +55,7 @@
         "revision": 14,
         "state_change_seq": 7423,
         "tab_id": "w5:t3",
-        "terminal_id": "term-3",
+        "terminal_id": "term_000000000003",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w5"
@@ -66,7 +66,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-4"
+          "value": "00000000-0000-4000-8000-000000000004"
         },
         "agent_status": "working",
         "cwd": "/Users/user/projects/proj2",
@@ -76,7 +76,7 @@
         "revision": 1,
         "state_change_seq": 9865,
         "tab_id": "w5:t3",
-        "terminal_id": "term-4",
+        "terminal_id": "term_000000000004",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w5"
@@ -87,7 +87,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-5"
+          "value": "00000000-0000-4000-8000-000000000005"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -97,7 +97,7 @@
         "revision": 4,
         "state_change_seq": 2856,
         "tab_id": "w5:t3",
-        "terminal_id": "term-5",
+        "terminal_id": "term_000000000005",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w5"
@@ -108,7 +108,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-6"
+          "value": "00000000-0000-4000-8000-000000000006"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -118,7 +118,7 @@
         "revision": 4,
         "state_change_seq": 2892,
         "tab_id": "w5:t3",
-        "terminal_id": "term-6",
+        "terminal_id": "term_000000000006",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w5"
@@ -129,7 +129,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-7"
+          "value": "00000000-0000-4000-8000-000000000007"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj3",
@@ -139,7 +139,7 @@
         "revision": 0,
         "state_change_seq": 12,
         "tab_id": "w5:t7",
-        "terminal_id": "term-7",
+        "terminal_id": "term_000000000007",
         "workspace_id": "w5"
       },
       {
@@ -148,7 +148,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-8"
+          "value": "00000000-0000-4000-8000-000000000008"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj4",
@@ -158,7 +158,7 @@
         "revision": 15,
         "state_change_seq": 0,
         "tab_id": "w3:t1",
-        "terminal_id": "term-8",
+        "terminal_id": "term_000000000008",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w3"
@@ -169,7 +169,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-9"
+          "value": "00000000-0000-4000-8000-000000000009"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj4",
@@ -179,7 +179,7 @@
         "revision": 14,
         "state_change_seq": 14089,
         "tab_id": "w3:t1",
-        "terminal_id": "term-9",
+        "terminal_id": "term_000000000009",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w3"
@@ -190,7 +190,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-10"
+          "value": "00000000-0000-4000-8000-000000000010"
         },
         "agent_status": "working",
         "cwd": "/Users/user/projects/proj4",
@@ -200,7 +200,7 @@
         "revision": 4,
         "state_change_seq": 14416,
         "tab_id": "w3:t1",
-        "terminal_id": "term-10",
+        "terminal_id": "term_000000000010",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w3"
@@ -211,7 +211,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-11"
+          "value": "00000000-0000-4000-8000-000000000011"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj5",
@@ -221,7 +221,7 @@
         "revision": 6,
         "state_change_seq": 13468,
         "tab_id": "w3:t8",
-        "terminal_id": "term-11",
+        "terminal_id": "term_000000000011",
         "terminal_title": "agent",
         "terminal_title_stripped": "agent",
         "workspace_id": "w3"
@@ -757,7 +757,7 @@
           "agent": "codex",
           "kind": "id",
           "source": "herdr:codex",
-          "value": "session-1"
+          "value": "00000000-0000-4000-8000-000000000001"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj1",
@@ -771,7 +771,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w5:t5",
-        "terminal_id": "term-1",
+        "terminal_id": "term_000000000001",
         "workspace_id": "w5"
       },
       {
@@ -780,7 +780,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-2"
+          "value": "00000000-0000-4000-8000-000000000002"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj1",
@@ -794,7 +794,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w5:t5",
-        "terminal_id": "term-2",
+        "terminal_id": "term_000000000002",
         "workspace_id": "w5"
       },
       {
@@ -810,7 +810,7 @@
           "viewport_rows": 18
         },
         "tab_id": "w5:t3",
-        "terminal_id": "term-12",
+        "terminal_id": "term_000000000012",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w5"
@@ -821,7 +821,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-3"
+          "value": "00000000-0000-4000-8000-000000000003"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -835,7 +835,7 @@
           "viewport_rows": 36
         },
         "tab_id": "w5:t3",
-        "terminal_id": "term-3",
+        "terminal_id": "term_000000000003",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w5"
@@ -846,7 +846,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-4"
+          "value": "00000000-0000-4000-8000-000000000004"
         },
         "agent_status": "working",
         "cwd": "/Users/user/projects/proj2",
@@ -860,7 +860,7 @@
           "viewport_rows": 36
         },
         "tab_id": "w5:t3",
-        "terminal_id": "term-4",
+        "terminal_id": "term_000000000004",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w5"
@@ -871,7 +871,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-5"
+          "value": "00000000-0000-4000-8000-000000000005"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -885,7 +885,7 @@
           "viewport_rows": 36
         },
         "tab_id": "w5:t3",
-        "terminal_id": "term-5",
+        "terminal_id": "term_000000000005",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w5"
@@ -896,7 +896,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-6"
+          "value": "00000000-0000-4000-8000-000000000006"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj2",
@@ -910,7 +910,7 @@
           "viewport_rows": 36
         },
         "tab_id": "w5:t3",
-        "terminal_id": "term-6",
+        "terminal_id": "term_000000000006",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w5"
@@ -928,7 +928,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w5:t4",
-        "terminal_id": "term-13",
+        "terminal_id": "term_000000000013",
         "workspace_id": "w5"
       },
       {
@@ -937,7 +937,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-7"
+          "value": "00000000-0000-4000-8000-000000000007"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj3",
@@ -951,7 +951,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w5:t7",
-        "terminal_id": "term-7",
+        "terminal_id": "term_000000000007",
         "workspace_id": "w5"
       },
       {
@@ -967,7 +967,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:t6",
-        "terminal_id": "term-14",
+        "terminal_id": "term_000000000014",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -978,7 +978,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-8"
+          "value": "00000000-0000-4000-8000-000000000008"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj4",
@@ -992,7 +992,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w3:t1",
-        "terminal_id": "term-8",
+        "terminal_id": "term_000000000008",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1003,7 +1003,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-9"
+          "value": "00000000-0000-4000-8000-000000000009"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj4",
@@ -1017,7 +1017,7 @@
           "viewport_rows": 27
         },
         "tab_id": "w3:t1",
-        "terminal_id": "term-9",
+        "terminal_id": "term_000000000009",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1028,7 +1028,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-10"
+          "value": "00000000-0000-4000-8000-000000000010"
         },
         "agent_status": "working",
         "cwd": "/Users/user/projects/proj4",
@@ -1042,7 +1042,7 @@
           "viewport_rows": 27
         },
         "tab_id": "w3:t1",
-        "terminal_id": "term-10",
+        "terminal_id": "term_000000000010",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1060,7 +1060,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:t3",
-        "terminal_id": "term-15",
+        "terminal_id": "term_000000000015",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1078,7 +1078,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:t7",
-        "terminal_id": "term-16",
+        "terminal_id": "term_000000000016",
         "workspace_id": "w3"
       },
       {
@@ -1094,7 +1094,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w3:t8",
-        "terminal_id": "term-17",
+        "terminal_id": "term_000000000017",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1112,7 +1112,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w3:t8",
-        "terminal_id": "term-18",
+        "terminal_id": "term_000000000018",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1123,7 +1123,7 @@
           "agent": "claude",
           "kind": "id",
           "source": "herdr:claude",
-          "value": "session-11"
+          "value": "00000000-0000-4000-8000-000000000011"
         },
         "agent_status": "idle",
         "cwd": "/Users/user/projects/proj5",
@@ -1137,7 +1137,7 @@
           "viewport_rows": 56
         },
         "tab_id": "w3:t8",
-        "terminal_id": "term-11",
+        "terminal_id": "term_000000000011",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1155,7 +1155,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:t9",
-        "terminal_id": "term-19",
+        "terminal_id": "term_000000000019",
         "workspace_id": "w3"
       },
       {
@@ -1171,7 +1171,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:tA",
-        "terminal_id": "term-20",
+        "terminal_id": "term_000000000020",
         "workspace_id": "w3"
       },
       {
@@ -1187,7 +1187,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:tC",
-        "terminal_id": "term-21",
+        "terminal_id": "term_000000000021",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"
@@ -1205,7 +1205,7 @@
           "viewport_rows": 58
         },
         "tab_id": "w3:tD",
-        "terminal_id": "term-22",
+        "terminal_id": "term_000000000022",
         "terminal_title": "shell",
         "terminal_title_stripped": "shell",
         "workspace_id": "w3"

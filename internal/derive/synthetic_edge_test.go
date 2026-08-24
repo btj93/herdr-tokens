@@ -62,7 +62,7 @@ func findWorkspace(t *testing.T, snap herdrapi.Snapshot, id string) herdrapi.Wor
 // all must get st_none set.
 func TestSyntheticEdgeNullWorkspaceGetsStNone(t *testing.T) {
 	snap := loadSyntheticEdgeFixture(t)
-	ws := findWorkspace(t, snap, "space-x-none")
+	ws := findWorkspace(t, snap, "w900") // label "space-x-none"
 	if ws.AgentStatus != nil {
 		t.Fatalf("fixture setup: workspace %q must have a null agent_status, got %q", ws.WorkspaceID, *ws.AgentStatus)
 	}
@@ -83,7 +83,7 @@ func TestSyntheticEdgeNullWorkspaceGetsStNone(t *testing.T) {
 // null on real-shaped data.
 func TestSyntheticEdgeUnknownWorkspaceGetsStUnknown(t *testing.T) {
 	snap := loadSyntheticEdgeFixture(t)
-	ws := findWorkspace(t, snap, "space-x-unknown")
+	ws := findWorkspace(t, snap, "w902") // label "space-x-unknown"
 	if ws.AgentStatus == nil || *ws.AgentStatus != "unknown" {
 		t.Fatalf(`fixture setup: workspace %q must have agent_status "unknown", got %v`, ws.WorkspaceID, ws.AgentStatus)
 	}
@@ -99,8 +99,8 @@ func TestSyntheticEdgeUnknownWorkspaceGetsStUnknown(t *testing.T) {
 // real snapshot rather than hand-built Go structs.
 func TestSyntheticEdgeNullAndUnknownAreDifferentKeys(t *testing.T) {
 	snap := loadSyntheticEdgeFixture(t)
-	noneWs := findWorkspace(t, snap, "space-x-none")
-	unknownWs := findWorkspace(t, snap, "space-x-unknown")
+	noneWs := findWorkspace(t, snap, "w900")    // label "space-x-none"
+	unknownWs := findWorkspace(t, snap, "w902") // label "space-x-unknown"
 
 	noneTok := StatusToken(noneWs.AgentStatus)
 	unknownTok := StatusToken(unknownWs.AgentStatus)
@@ -121,7 +121,7 @@ func TestSyntheticEdgeNullAndUnknownAreDifferentKeys(t *testing.T) {
 // and confirms n_agents counts every agent in the workspace, blocked or not.
 func TestSyntheticEdgeBlockedCountAndAgentCount(t *testing.T) {
 	snap := loadSyntheticEdgeFixture(t)
-	ws := findWorkspace(t, snap, "space-x-blocked")
+	ws := findWorkspace(t, snap, "w901") // label "space-x-blocked"
 
 	wantBlocked, wantTotal := 0, 0
 	for _, a := range snap.Agents {

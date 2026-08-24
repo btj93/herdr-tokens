@@ -29,11 +29,12 @@ Verified against **Herdr 0.8.2, protocol 20** on macOS.
 - The plugin subscribes to no events. Polling doubles as the TTL heartbeat,
   which avoids a metadata feedback loop.
 
-### Known limitation — fixture privacy guards are shape-based
+### Fixture privacy guard — replaced the shape-based denylist with a closed positive schema
 
-`scripts/sanitize.py`, the fixture tests, and `.githooks/pre-commit` detect
-private data by scanning for *known-bad shapes*: a `/Users/` path that is not
-the placeholder, a tilde path, a non-generic `terminal_title`, a UUID, a
+This was originally recorded here as a *known limitation*: `scripts/sanitize.py`,
+the fixture tests, and `.githooks/pre-commit` detected private data by
+scanning for *known-bad shapes* — a `/Users/` path that is not the
+placeholder, a tilde path, a non-generic `terminal_title`, a UUID, a
 `term_`-prefixed identifier. That is a denylist, and a denylist has a specific
 blind spot worth stating plainly:
 
@@ -51,9 +52,33 @@ corrects `HEAD` and leaves every historical blob untouched, while every
 subsequent working-tree check reports success. Scan every object in history,
 not the files you just edited.
 
-The v0.1.1 direction is to invert this — assert that fixtures conform to a
-**positive schema** of permitted values, rather than scanning for a growing
-list of forbidden ones. An allowlist would have returned clean for both tools
-on the first pass. Until then, treat a novel identifier shape as likely rather
-than hypothetical: three distinct classes of private data were found here in
-sequence, each invisible to the rule that caught the previous one.
+**This is now implemented, before publication, rather than deferred to
+v0.1.1.** `internal/herdrapi/schema.go` inverts the guard: it asserts that a
+decoded fixture conforms to a **positive schema** of permitted fields and
+value shapes (a literal, an enum, or a regex per field — e.g. `terminal_id`
+must match `^term_\d{12}$`, `agent_session.value` must match
+`^00000000-0000-4000-8000-\d{12}$`), rather than scanning for a growing list
+of forbidden ones. Critically, the schema is **closed**: a field present in a
+fixture but not named in the schema for its enclosing object fails, naming
+the field, instead of passing through unexamined — a future Herdr version
+that adds a field anywhere in the tree fails the build the first time a
+fixture containing it is captured, until a human classifies it. Both
+`term_00000000abcd` and `term_000000000001` — the two placeholder conventions
+that fooled each other's denylist above — now fail the same check, for the
+same reason: neither is `^term_\d{12}$`. Placeholders are deliberately
+conformant now, rather than merely distinguishable-by-convention from a live
+value.
+
+`scripts/sanitize.py` was updated to emit schema-conformant placeholders
+(`term_<12 digits>`, `00000000-0000-4000-8000-<12 digits>`), `testdata/*.json`
+were re-sanitized and hand-verified against the schema, and
+`.githooks/pre-commit` now builds and runs the schema checker
+(`cmd/schema-check`) against every staged `testdata/` blob. The five denylist
+checks the schema strictly subsumes (paths, tilde paths, titles, UUIDs,
+`term_` identifiers) were deleted rather than kept alongside it; one denylist
+check survives deliberately — a raw scan for the committing user's account
+name anywhere in the blob — because a few schema fields (protocol-internal
+descriptors, not user data) are intentionally type-checked only, and a leaked
+account name could otherwise hide in one of those. See
+`internal/herdrapi/schema.go`'s header comment and the README's "Why a
+schema, not a denylist" section for the full reasoning.

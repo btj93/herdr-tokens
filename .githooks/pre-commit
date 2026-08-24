@@ -15,6 +15,33 @@
 # afterwards must still be caught, because it is the staged content that
 # actually gets committed.
 #
+# THE CHECK ITSELF is a CLOSED POSITIVE SCHEMA (internal/herdrapi/schema.go),
+# not a denylist: it asserts every field present in a staged testdata/ blob
+# is one this schema recognises AND has the exact shape (a literal, an enum,
+# or a regex) that field is allowed to have, rather than scanning for a
+# fixed list of known-bad shapes. That inversion is the fix for a specific,
+# demonstrated failure of the denylist this hook used to run inline (six
+# grep-based rules, one per known-bad shape): two independently written
+# audit tools each cleared their own repository's placeholder convention and
+# each flagged the OTHER's as a leak, because a scan for known-bad shapes
+# cannot distinguish a leak from its own fix. See the CHANGELOG "Known
+# limitation" section for the full account. Those six rules are DELETED
+# here, not kept alongside the schema: every guarantee they provided (an
+# unrecognised path/tilde-path/title/UUID/term_ shape anywhere in the tree
+# still fails) is strictly subsumed by the closed schema, which additionally
+# catches a field the old rules never knew to look for at all. This hook
+# retains exactly ONE rule from the old set below (the committing account
+# name, checked as a raw substring anywhere in the blob): that check's
+# guarantee is NOT subsumed by the schema, because several schema fields
+# (agent_session.kind, agent_session.source, a layout split's "direction"
+# and "id", the top-level "version") are deliberately type-checked only, not
+# pattern-constrained -- see schema.go's header for why -- so an account
+# name landing in one of those would validate cleanly against the schema
+# while still being a real leak. A raw substring scan has no notion of
+# "known-bad shape" to be blind to, so it stays as a cheap, cross-cutting
+# second check with a genuinely different guarantee than the schema, not a
+# second copy of the same one.
+#
 # FAIL CLOSED, not open. An earlier version of this hook treated any
 # non-zero exit from grep -- "no match" (1), "binary/NUL input" (also 1 on
 # most greps, without even scanning), a genuine error (2+), or "grep isn't
@@ -26,7 +53,7 @@
 # false confidence. So, throughout this script:
 #   - every external command it needs is checked present on PATH up front;
 #     a missing one refuses the commit, it does not skip the check.
-#   - every grep/sed/wc/tr/git/id whose result is a security decision has
+#   - every grep/tr/wc/git/id/go whose result is a security decision has
 #     its exit status captured explicitly via `set +e; <cmd>; rc=$?; set
 #     -e` (never bare `|| :`) and passed to `require_ok`, which itself
 #     returns non-zero on anything unexpected -- and every call site acts
@@ -40,6 +67,15 @@
 #     definition; a NUL byte there is both unscannable and not something
 #     scripts/capture-fixture.sh would ever produce), and a NUL byte
 #     refuses the commit rather than being silently skipped or stripped.
+#   - the schema check specifically does NOT trust a bare exit code from
+#     `go build`/the compiled checker at face value where a richer signal
+#     is available: exit 1 from the checker binary is cross-checked against
+#     actually having produced >=1 "SCHEMA_VIOLATION" line before being
+#     treated as a genuine finding (see below and cmd/schema-check's own
+#     comments for why this matters -- `go run` would have collapsed exit
+#     codes 1 and 2 into one indistinguishable value, which is exactly why
+#     this hook builds a real binary with `go build` instead of using
+#     `go run` per staged file).
 #   - no step is a multi-command PIPELINE whose overall exit status is
 #     checked as if it reflected every command in it. A shell pipeline's
 #     exit status is only that of its LAST command, so `a | b; rc=$?`
@@ -48,25 +84,25 @@
 #     extension, not POSIX, and this hook is `#!/bin/sh` -- on Debian/
 #     Ubuntu (where CI, and many contributors, run) `/bin/sh` is dash,
 #     which does not support it, so the hook would error out there while
-#     appearing to work on a macOS contributor's machine. Instead, every
-#     place that used to pipe one command into another (originally, the
-#     NUL-stripping `tr -d '\000' | wc -c`) is split into separate steps
-#     with an intermediate file, each with its own captured, checked exit
-#     status.
+#     appearing to work on a macOS contributor's machine. Every place that
+#     pipes one command into another instead uses separate steps with an
+#     intermediate file, each with its own captured, checked exit status.
 #
-# POSIX sh only, and deliberately avoids GNU-only regex behaviour (e.g. a
-# trailing empty alternative in an ERE such as `(shell|agent|nvim|)$`) since
+# POSIX sh only, and deliberately avoids GNU-only regex behaviour, since
 # this runs on whatever grep a developer's machine has -- BSD grep, a ugrep
-# shim, etc. -- not necessarily GNU grep. Rule 3 below uses `case` instead of
-# an alternation regex for exactly that reason.
+# shim, etc. -- not necessarily GNU grep.
 
 set -eu
 
 # --- Dependency preflight --------------------------------------------------
 # Refuse rather than silently skip verification if any tool this hook needs
 # is missing. `command -v` also catches the case where a name resolves to
-# something that isn't actually executable.
-for dep in git mktemp id grep sed tr wc rm printf; do
+# something that isn't actually executable. `go` is required to build the
+# schema checker (internal/herdrapi/schema.go via cmd/schema-check); there is
+# no shell-only fallback -- see the header comment on why re-implementing the
+# schema in POSIX sh was rejected (it would be a second copy of the rules
+# with its own chance to drift from the Go source of truth).
+for dep in git mktemp id grep tr wc rm printf go; do
 	if ! command -v "$dep" >/dev/null 2>&1; then
 		printf 'pre-commit: required command "%s" not found on PATH -- refusing to commit\n' "$dep" >&2
 		printf '(cannot verify testdata/ fixtures are sanitized without it; fix PATH and retry)\n' >&2
@@ -111,7 +147,11 @@ refusal_message() {
 		echo ""
 		echo "    ./scripts/capture-fixture.sh testdata/<file>.json"
 		echo ""
-		echo "and re-stage the regenerated, sanitized file."
+		echo "and re-stage the regenerated, sanitized file. If the BLOCKED line names a"
+		echo "SCHEMA_VIOLATION and re-capturing does not fix it, the fixture needs a new"
+		echo "field or shape classified in internal/herdrapi/schema.go -- that schema is"
+		echo "CLOSED deliberately; a field it has never seen is refused until a human"
+		echo "decides how it should be validated, not silently accepted."
 		echo ""
 		echo "(Emergency bypass: git commit --no-verify -- but the fixtures-are-sanitized CI"
 		echo "job still runs and will still fail; it's a backstop, not a way around this.)"
@@ -151,6 +191,42 @@ if [ ! -s "$tmp/staged" ]; then
 	exit 0
 fi
 
+# --- Build the schema checker once, reused for every staged file below -----
+# Built into $tmp (never bin/, which is gitignored build output, not
+# something a hook should leave behind or race with a concurrent `make
+# build`). A real binary, not `go run` per file: `go run` collapses every
+# non-zero child exit code into its own generic exit status 1 and discards
+# the original value -- confirmed directly against this exact tool, where a
+# genuine schema violation (intended exit 1) and a file this tool could not
+# even read or parse (intended exit 2) both come back from `go run` as
+# indistinguishable exit 1. A real binary preserves the original exit code,
+# which is what lets the rc-based branches below actually discriminate.
+set +e
+git rev-parse --show-toplevel >"$tmp/root" 2>"$tmp/root.err"
+root_rc=$?
+set -e
+require_ok "$root_rc" "0" "git rev-parse --show-toplevel failed; cannot locate the module to build the schema checker" || {
+	refusal_message
+	exit 1
+}
+repo_root=$(cat "$tmp/root")
+if [ -z "$repo_root" ]; then
+	infra_fail "git rev-parse --show-toplevel returned nothing; cannot locate the module to build the schema checker"
+	refusal_message
+	exit 1
+fi
+
+set +e
+(cd "$repo_root" && go build -o "$tmp/schema-check" ./cmd/schema-check) >"$tmp/build.out" 2>"$tmp/build.err"
+build_rc=$?
+set -e
+if [ "$build_rc" -ne 0 ]; then
+	infra_fail "go build ./cmd/schema-check failed (exit $build_rc); cannot verify staged fixtures without it -- see below"
+	cat "$tmp/build.err" >&2
+	refusal_message
+	exit 1
+fi
+
 set +e
 me=$(id -un)
 id_rc=$?
@@ -181,7 +257,9 @@ while IFS= read -r f; do
 	# the bug this fixes), and does not use tr's output to "clean" the
 	# file for scanning -- a NUL byte is refused outright, never
 	# silently stripped and scanned anyway, because that would hide the
-	# anomaly instead of surfacing it.
+	# anomaly instead of surfacing it. It also guarantees the schema
+	# checker (which decodes the blob as JSON/UTF-8) is never handed
+	# content that could not possibly be valid JSON to begin with.
 	#
 	# The stripping-and-counting step is intentionally two separate
 	# commands (tr to a file, then wc on that file) rather than
@@ -212,137 +290,67 @@ while IFS= read -r f; do
 		continue
 	fi
 
-	# --- Rule 1: no /Users/<name> other than /Users/user ---
-	set +e
-	grep -nE '/Users/[^"/]+' "$blob" >"$tmp/cand1" 2>"$tmp/cand1.err"
-	rc=$?
-	set -e
-	require_ok "$rc" "0 1" "grep (rule 1, /Users/ paths) failed scanning $f" || continue
-	while IFS=: read -r lineno rest; do
-		[ -n "$lineno" ] || continue
-		set +e
-		printf '%s\n' "$rest" | grep -oE '/Users/[^"/]+' >"$tmp/tok1" 2>"$tmp/tok1.err"
-		rc=$?
-		set -e
-		require_ok "$rc" "0 1" "grep (rule 1 token extraction) failed scanning $f line $lineno" || continue
-		while IFS= read -r tok; do
-			[ -n "$tok" ] || continue
-			if [ "$tok" != "/Users/user" ]; then
-				report "$f" "$lineno" "USERS_PATH" "found $tok (only /Users/user is allowed)"
-			fi
-		done <"$tmp/tok1"
-	done <"$tmp/cand1"
-
-	# --- Rule 2: no tilde path other than ~/projects/app ---
-	set +e
-	grep -nE '~/[A-Za-z0-9_./-]+' "$blob" >"$tmp/cand2" 2>"$tmp/cand2.err"
-	rc=$?
-	set -e
-	require_ok "$rc" "0 1" "grep (rule 2, tilde paths) failed scanning $f" || continue
-	while IFS=: read -r lineno rest; do
-		[ -n "$lineno" ] || continue
-		set +e
-		printf '%s\n' "$rest" | grep -oE '~/[A-Za-z0-9_./-]+' >"$tmp/tok2" 2>"$tmp/tok2.err"
-		rc=$?
-		set -e
-		require_ok "$rc" "0 1" "grep (rule 2 token extraction) failed scanning $f line $lineno" || continue
-		while IFS= read -r tok; do
-			[ -n "$tok" ] || continue
-			if [ "$tok" != "~/projects/app" ]; then
-				report "$f" "$lineno" "TILDE_PATH" "found $tok (only ~/projects/app is allowed)"
-			fi
-		done <"$tmp/tok2"
-	done <"$tmp/cand2"
-
-	# --- Rule 3: terminal_title / terminal_title_stripped must be one of
-	# shell, agent, nvim, or empty. Fixed-string grep to find candidate
-	# lines (portable), then a POSIX BRE sed to pull the JSON value out,
-	# then a plain `case` to test membership -- no alternation regex, so
-	# this cannot hit the empty-alternative parser issue GNU/BSD/ugrep
-	# disagree on.
-	set +e
-	grep -nF '"terminal_title' "$blob" >"$tmp/cand3" 2>"$tmp/cand3.err"
-	rc=$?
-	set -e
-	require_ok "$rc" "0 1" "grep (rule 3, terminal_title) failed scanning $f" || continue
-	while IFS=: read -r lineno rest; do
-		[ -n "$lineno" ] || continue
-		set +e
-		val=$(printf '%s\n' "$rest" | sed -n 's/.*"terminal_title[a-zA-Z_]*" *: *"\([^"]*\)".*/\1/p')
-		sed_rc=$?
-		set -e
-		require_ok "$sed_rc" "0" "sed (rule 3 value extraction) failed on $f line $lineno" || continue
-		case "$val" in
-		shell | agent | nvim | "") ;;
-		*)
-			report "$f" "$lineno" "TERMINAL_TITLE" "found \"$val\" (only shell/agent/nvim/empty are allowed)"
-			;;
-		esac
-	done <"$tmp/cand3"
-
-	# --- Rule 4: no occurrence of the committing user's own account name.
+	# --- Rule: no occurrence of the committing user's own account name.
 	# `git config user.name` is not reliable for this (it's freely set and
 	# may not match the machine account at all); the machine account name
-	# via `id -un` is what would actually appear in a captured path.
+	# via `id -un` is what would actually appear in a captured path. Kept
+	# alongside the schema check below (not subsumed by it -- see the file
+	# header) as a cheap, cross-cutting raw substring scan.
 	case "$me" in
 	user | runner | "") ;; # these ARE the sanctioned placeholders; nothing to guard against
 	*)
 		set +e
-		grep -nF "$me" "$blob" >"$tmp/cand4" 2>"$tmp/cand4.err"
+		grep -nF "$me" "$blob" >"$tmp/cand_user" 2>"$tmp/cand_user.err"
 		rc=$?
 		set -e
-		require_ok "$rc" "0 1" "grep (rule 4, account name) failed scanning $f" || continue
+		require_ok "$rc" "0 1" "grep (account name) failed scanning $f" || continue
 		while IFS=: read -r lineno rest; do
 			[ -n "$lineno" ] || continue
 			report "$f" "$lineno" "REAL_USERNAME" "line contains committing user's account name ($me)"
-		done <"$tmp/cand4"
+		done <"$tmp/cand_user"
 		;;
 	esac
 
-	# --- Rule 5: no UUID-shaped value (8-4-4-4-12 hex) anywhere. Real
-	# agent_session.value identifiers have exactly this shape;
-	# scripts/sanitize.py's session-N placeholders do not (no hyphens in
-	# that shape), so unlike rules 1/2/3 there is no placeholder value to
-	# exempt -- any match here is unconditionally bad.
+	# --- Closed positive schema check (internal/herdrapi/schema.go) ---
+	# See the file header for why this replaced six inline denylist rules
+	# instead of running alongside them, and why it cross-checks the
+	# checker's exit code against actually having produced a
+	# "SCHEMA_VIOLATION" line rather than trusting the exit code alone.
 	set +e
-	grep -nE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$blob" >"$tmp/cand5" 2>"$tmp/cand5.err"
-	rc=$?
+	"$tmp/schema-check" "$blob" >"$tmp/schema.out" 2>"$tmp/schema.err"
+	schema_rc=$?
 	set -e
-	require_ok "$rc" "0 1" "grep (rule 5, UUID-shaped value) failed scanning $f" || continue
-	while IFS=: read -r lineno rest; do
-		[ -n "$lineno" ] || continue
-		set +e
-		printf '%s\n' "$rest" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' >"$tmp/tok5" 2>"$tmp/tok5.err"
-		rc=$?
-		set -e
-		require_ok "$rc" "0 1" "grep (rule 5 token extraction) failed scanning $f line $lineno" || continue
-		while IFS= read -r tok; do
-			[ -n "$tok" ] || continue
-			report "$f" "$lineno" "LIVE_SESSION_ID" "found $tok (UUID-shaped identifier; must be scrubbed to session-N by scripts/sanitize.py)"
-		done <"$tmp/tok5"
-	done <"$tmp/cand5"
 
-	# --- Rule 6: no term_-prefixed identifier anywhere. Real terminal_id
-	# values look like "term_00000000abcd"; scripts/sanitize.py's term-N
-	# placeholders use a hyphen, not an underscore, so this is also an
-	# unconditional denylist with no placeholder to exempt.
-	set +e
-	grep -nF '"term_' "$blob" >"$tmp/cand6" 2>"$tmp/cand6.err"
-	rc=$?
-	set -e
-	require_ok "$rc" "0 1" "grep (rule 6, term_ identifier) failed scanning $f" || continue
-	while IFS=: read -r lineno rest; do
-		[ -n "$lineno" ] || continue
+	case "$schema_rc" in
+	0)
+		if [ -s "$tmp/schema.out" ] || [ -s "$tmp/schema.err" ]; then
+			infra_fail "schema-check exited 0 for $f but printed output; treating an unexplained result as untrustworthy rather than clean"
+		fi
+		;;
+	1)
 		set +e
-		printf '%s\n' "$rest" | grep -oE '"term_[^"]*"' >"$tmp/tok6" 2>"$tmp/tok6.err"
-		rc=$?
+		grep -c '^SCHEMA_VIOLATION	' "$tmp/schema.err" >"$tmp/violation_count" 2>"$tmp/violation_count.err"
+		count_rc=$?
 		set -e
-		require_ok "$rc" "0 1" "grep (rule 6 token extraction) failed scanning $f line $lineno" || continue
-		while IFS= read -r tok; do
-			[ -n "$tok" ] || continue
-			report "$f" "$lineno" "LIVE_TERMINAL_ID" "found $tok (term_-prefixed terminal identifier; must be scrubbed to term-N by scripts/sanitize.py)"
-		done <"$tmp/tok6"
-	done <"$tmp/cand6"
+		# grep -c exits 1 (not an error) when it finds zero matching
+		# lines, so "0 1" are both acceptable exit statuses here; what
+		# matters is the COUNT recorded in violation_count either way.
+		require_ok "$count_rc" "0 1" "grep failed counting SCHEMA_VIOLATION lines for $f" || continue
+		n=$(cat "$tmp/violation_count")
+		if [ "$n" -lt 1 ]; then
+			infra_fail "schema-check exited 1 for $f but produced no SCHEMA_VIOLATION line -- this is a build/runtime problem with the checker itself, not a confirmed fixture defect, so it is refused rather than assumed clean"
+		else
+			while IFS="$(printf '\t')" read -r _tag _path detail; do
+				[ -n "$_tag" ] || continue
+				report "$f" "-" "SCHEMA_VIOLATION" "$detail"
+			done <"$tmp/schema.err"
+		fi
+		;;
+	*)
+		infra_fail "schema-check exited $schema_rc for $f (want 0 clean or 1 violations-found); cannot certify this file"
+		cat "$tmp/schema.err" >&2
+		;;
+	esac
 done <"$tmp/staged"
 
 if [ -f "$tmp/failed" ]; then
