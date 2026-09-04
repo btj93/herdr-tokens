@@ -14,11 +14,32 @@ import (
 	"time"
 )
 
+// socketPathLimit guards well under the macOS AF_UNIX sun_path limit of 104
+// bytes; see newSocketPath.
+const socketPathLimit = 90
+
+// newSocketPath returns a unique path inside a short private directory. A
+// short root matters because Unix socket addresses are length-limited (104
+// bytes on macOS), and a unique directory keeps a "missing" socket path from
+// colliding with another process.
+func newSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "herdrtok-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "socket")
+	if len(sock) >= socketPathLimit {
+		t.Fatalf("socket path %q is %d bytes, at or over the %d-byte guard (macOS sun_path limit is 104 bytes) -- shorten the temp dir prefix", sock, len(sock), socketPathLimit)
+	}
+	return sock
+}
+
 // fakeServer serves exactly one request per connection, as Herdr does.
 func fakeServer(t *testing.T, reply func(req map[string]any) string) string {
 	t.Helper()
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "h.sock")
+	sock := newSocketPath(t)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -52,8 +73,7 @@ func fakeServer(t *testing.T, reply func(req map[string]any) string) string {
 // rather than hanging on the read until something else acts.
 func fakeServerBlocking(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "h.sock")
+	sock := newSocketPath(t)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)

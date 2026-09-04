@@ -184,12 +184,33 @@ func injectObservedTokens(raw string, store *tokenStore) string {
 // report_metadata calls always succeed; they are recorded in the call log
 // as before, and now also applied to the tokenStore so later session.
 // snapshot replies reflect them.
+// socketPathLimit guards well under the macOS AF_UNIX sun_path limit of 104
+// bytes; see newSocketPath.
+const socketPathLimit = 90
+
+// newSocketPath returns a unique path inside a short private directory. A
+// short root matters because Unix socket addresses are length-limited (104
+// bytes on macOS), and a unique directory keeps a "missing" socket path from
+// colliding with another process.
+func newSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "herdrtok-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "socket")
+	if len(sock) >= socketPathLimit {
+		t.Fatalf("socket path %q is %d bytes, at or over the %d-byte guard (macOS sun_path limit is 104 bytes) -- shorten the temp dir prefix", sock, len(sock), socketPathLimit)
+	}
+	return sock
+}
+
 func scriptedServer(t *testing.T, reply func(n int) string) (string, *callLog) {
 	t.Helper()
 	log := &callLog{}
 	store := &tokenStore{}
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "h.sock")
+	sock := newSocketPath(t)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
