@@ -11,7 +11,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # DO NOT pin this to match go.mod's `go 1.22`. They are different
+          # things and making them agree breaks the macOS job.
+          #
+          # go.mod's directive is the LANGUAGE FLOOR — the oldest Go a
+          # consumer may build this module with. That stays at 1.22.
+          # `go-version` here selects the TOOLCHAIN CI builds *with*, which
+          # is unrelated to the declared minimum.
+          #
+          # Pinning 1.22 here fails on macos-latest, before a single test
+          # runs: Go 1.22 links race-detector binaries without an LC_UUID
+          # load command, and current macOS dyld rejects them —
+          #   dyld: missing LC_UUID load command in ...herdr-tokens.test
+          #   signal: abort trap
+          # Every package aborts at binary load time (0.002-0.035s), which
+          # looks like a broad test failure and is actually a
+          # toolchain-versus-runner mismatch touching no project code.
+          go-version: stable
       - run: go vet ./...
       - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go test -race ./...
@@ -34,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: stable  # see note in the test job above
       # COARSE PRE-FILTER ONLY, not the guard. Each grep below inspects a
       # single extracted TOKEN (e.g. only the path segment immediately
       # after "/Users/"), never the whole decoded JSON string value. That
